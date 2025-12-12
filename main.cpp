@@ -30,8 +30,7 @@
 #include <AsyncTCP.h>          // Bliblioteka TCP dla serwera web
 #include <Update.h>            // Blibioteka dla aktulizacji OTA
 #include <ESPmDNS.h>           // Blibioteka mDNS dla ESP
-#include "AudioRuntimeEQ_Evo.h"
-#include "EQ_AnalyzerDisplay.h"
+#include "EQ_AnalyzerDisplay.h"  // FFT analyzer (styles 5/6)
 
 
 #include "soc/rtc_cntl_reg.h"   // Biblioteki ESP aby móc zrobic pełny reset 
@@ -126,7 +125,8 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
 #define STATION_NAME_LENGTH 220  // Nazwa stacji wraz z bankiem i numerem stacji do wyświetlenia w pierwszej linii na ekranie
 #define MAX_FILES 100            // Maksymalna liczba plików lub katalogów w tablicy directoriesz
 #define bank_nr_max 16           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
-#define displayModeMax 6         // Ogrniczenie maksymalnej ilosci trybów wyswietlacza OLED
+// Maksymalny numer stylu ekranu (dynamicznie: 0–3 lub 0–6)
+uint8_t displayModeMax = 4;         // PODSTAWOWE style 0..4 (FFT w WWW podniesie do 6)         // Ogrniczenie maksymalnej ilosci trybów wyswietlacza OLED
 
 // DEBUG PRINTS - ON/OFF
 #define f_debug_web_on 0         // Flaga właczenia wydruku debug_web
@@ -269,7 +269,7 @@ uint8_t rcInputDigit2 = 0xFF;      // Druga cyfra w przy wprowadzaniu numeru sta
 
 
 // ---- Zmienne konfiguracji ---- //
-uint16_t configArray[23] = { 0 };
+uint16_t configArray[25] = { 0 };
 uint8_t rcPage = 0;
 uint16_t configRemoteArray[30] = { 0 };   // Tablica przechowująca kody pilota podczas odczytu z pliku
 uint16_t configAdcArray[20] = { 0 };      // Tablica przechowująca wartosci ADC dla przyciskow klawiatury
@@ -341,6 +341,7 @@ const int vuCenterXmode3 = 128;            // Pozycja centralna startu VU w tryb
 const int vuYmode3 = 62;                   // Polozenie wyokosci (Y) VU w trybie Mode 3
 bool vuPeakHoldOn = 1;                     // Flaga okreslajaca czy funkcja Peak & Hold na wskazniku VUmeter jest wlaczona
 bool vuMeterOn = true;                     // Flaga właczajaca wskazniki VU
+bool eqAnalyzerOn = false;               // FFT analyzer on/off for styles 5 & 6 (from Web UI)
 bool vuMeterMode = false;                  // tryb rysowania vuMeter
 uint8_t displayVuL = 0;                    // wartosc VU do wyswietlenia po procesie smooth
 uint8_t displayVuR = 0;                    // wartosc VU do wyswietlenia po procesie smooth
@@ -884,7 +885,7 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><td>OLED Display Clock in Sleep Mode default:Off</td><td><input type="checkbox" name="f_displayPowerOffClock" value="1" %S19_checked></td></tr>
   <tr><td>OLED Display Power Save Mode, default:Off</td><td><input type="checkbox" name="displayPowerSaveEnabled" value="1" %S9_checked></td></tr>
   <tr><td>OLED Display Power Save Time (1-600sek.), default:20</td><td><input type="number" name="displayPowerSaveTime" min="1" max="600" value="%D9"></td></tr>
-  <tr><td>OLED Display Mode (0-6), 0-Radio scroller, 1-Clock, 2-Three lines, 3-Minimal 4-VU meters</td><td><input type="number" name="displayMode" min="0" max="6" value="%D6"></td></tr>
+  <tr><td>OLED Display Mode (0-4), 0-Radio scroller, 1-Clock, 2-Three lines, 3-Minimal 4-VU meters</td><td><input type="number" name="displayMode" min="0" max="6" value="%D6"></td></tr>
 
   <tr><th>Other Setting</th><th></th></tr>
   <tr><td>Time Voice Info Every Hour, default:On</td><td><input type="checkbox" name="timeVoiceInfoEveryHour" value="1" %S3_checked></td></tr>
@@ -905,6 +906,7 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><td>VU Meter Smooth Function, default:On</td><td><input type="checkbox" name="vuSmooth" value="1" %S15_checked></td></tr>
   <tr><td>VU Meter Smooth Rise Speed [1 low - 32 High], default:24</td><td><input type="number" name="vuRiseSpeed" min="1" max="32" value="%D10"></td></tr>
   <tr><td>VU Meter Smooth Fall Speed [1 low - 32 High], default:6</td><td><input type="number" name="vuFallSpeed" min="1" max="32" value="%D11"></td></tr>
+  <tr><td>FFT / Analyzer for Style 5 & 6, default:Off</td><td><input type="checkbox" name="eqAnalyzerOn" value="1" %S24_checked></td></tr>
   </table>
   <input type="submit" value="Update">
   </form>
@@ -2873,7 +2875,7 @@ void stationStringFormatting()
       stationStringScroll = stationString;
     }  
   }
-  else if ((displayMode == 3) || (displayMode == 5)) // Tryb wświetlania mode 3 i mode 5 (małe spectrum)
+  else if (displayMode == 3) //|| displayMode == 5 Tryb wświetlania mode 3 i mode 5 (małe spectrum)
   {
     if (stationString == "") // Jeżeli stationString jest pusty i stacja go nie nadaje to podmieniamy pusty stationString na nazwę staji - stationNameStream
     {    
@@ -6567,6 +6569,7 @@ void saveConfig()
       myFile.println("Volume fade on station change and power off =" + String(f_volumeFadeOn) + ";");
       myFile.println("Save Always Station Bank Volume or only during power off =" + String(f_saveVolumeStationAlways) + ";");
       
+      myFile.println("FFT Analyzer for Style 5&6 =" + String(eqAnalyzerOn ? 1 : 0) + ";");
 
       myFile.close();
       Serial.println("Aktualizacja config.txt na karcie SD");
@@ -6609,6 +6612,7 @@ void saveConfig()
       myFile.print("Radio goes to sleep after Power Fail =");    myFile.print(f_sleepAfterPowerFail); myFile.println(";");
       myFile.println("Volume fade on station change and power off =" + String(f_volumeFadeOn) + ";");
       myFile.println("Save Always Station Bank Volume or only during power off =" + String(f_saveVolumeStationAlways) + ";");
+      myFile.println("FFT Analyzer for Style 5&6 =" + String(eqAnalyzerOn ? 1 : 0) + ";");
       myFile.close();
       Serial.println("Utworzono i zapisano config.txt na karcie SD");
     } 
@@ -6775,6 +6779,10 @@ void readConfig()
   f_sleepAfterPowerFail = configArray[21];
   f_volumeFadeOn = configArray[22];
   f_saveVolumeStationAlways = configArray[23];
+
+  // FFT analyzer enable (style 5/6). If config file has no entry yet, defaults to OFF.
+  eqAnalyzerOn = (configArray[24] != 0);
+  eqAnalyzerSetFromWeb(eqAnalyzerOn);
 
   if (maxVolumeExt == 1)
   { 
@@ -7949,8 +7957,6 @@ void startOta()
 
 void setup() 
 {
-  eqAnalyzerInit();  // Inicjalizacja analizatora FFT (style 5 i 6)
-
 
   // Inicjalizuj komunikację szeregową (Serial)
   Serial.begin(115200);
@@ -8580,6 +8586,7 @@ void setup()
         html.replace(F("%S5_checked"), vuMeterOn ? " checked" : "");
         html.replace(F("%S7_checked"), adcKeyboardEnabled ? " checked" : "");
         html.replace(F("%S9_checked"), displayPowerSaveEnabled ? " checked" : "");
+        html.replace(F("%S24_checked"), eqAnalyzerOn ? " checked" : "");
               
 
         request->send(200, "text/html", html);
@@ -8702,6 +8709,8 @@ void setup()
       f_sleepAfterPowerFail      = request->hasParam("f_sleepAfterPowerFail", true);
       f_volumeFadeOn             = request->hasParam("f_volumeFadeOn", true);
       f_saveVolumeStationAlways  = request->hasParam("f_saveVolumeStationAlways", true);
+      eqAnalyzerOn               = request->hasParam("eqAnalyzerOn", true);
+      eqAnalyzerSetFromWeb(eqAnalyzerOn);
 
       // Jeśli parametr istnieje checkbox był zaznaczony to TRUE
       // Jeśli go nie ma checkbox nie był zaznaczony to FALSE
@@ -9518,7 +9527,7 @@ void loop()
       
       if ((displayMode == 0) || (displayMode == 2))  {drawSignalPower(210,63,0,1);}
       if ((displayMode == 1) && (volumeMute == false)) {drawSignalPower(244,47,0,1);}
-      if ((displayMode == 3) || (displayMode == 5)) {drawSignalPower(209,10,0,1);}
+      if (displayMode == 3) {drawSignalPower(209,10,0,1);}
 
       if ((f_audioInfoRefreshStationString == true) && (displayActive == false)) // Zmiana streamtitle - wymaga odswiezenia na wyswietlaczu
       { 
