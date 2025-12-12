@@ -29,6 +29,9 @@ extern const uint8_t u8g2_font_5x8_mr[];
 // ─────────────────────────────────────
 // ZMIENNE ANALIZATORA / EQ – współdzielone z AudioRuntimeEQ_Evo.cpp
 // ─────────────────────────────────────
+extern uint8_t displayMode;
+extern uint8_t displayModeMax;
+
 
 // Te dwie flagi są zadeklarowane jako extern w AudioRuntimeEQ_Evo.h,
 // a używane m.in. w AudioRuntimeEQ_Evo.cpp. Tu robimy ich faktyczną definicję.
@@ -81,7 +84,21 @@ void eqAnalyzerInit()
 // to wywołujesz z handlera HTTP / WebSocket
 void eqAnalyzerSetFromWeb(bool enabled)
 {
+  // Flaga z AudioRuntimeEQ_Evo.cpp – steruje liczeniem analizatora
   eqAnalyzerEnabled = enabled;
+
+  // Ograniczenie dostępnych stylów OLED:
+  //  - FFT OFF: style 0..4
+  //  - FFT ON : style 0..6 (dodatkowe 5 i 6)
+  if (enabled)
+  {
+    displayModeMax = 6;
+  }
+  else
+  {
+    displayModeMax = 4;
+    if (displayMode > displayModeMax) displayMode = 0;
+  }
 }
 
 // ─────────────────────────────────────
