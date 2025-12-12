@@ -1,15 +1,13 @@
 #pragma once
 #include <Arduino.h>
 
-// Inicjalizacja ustawień analizatora (wywołaj w setup, po audio.begin() / init EQ)
+// Inicjalizacja parametrów analizatora (opcjonalnie)
 void eqAnalyzerInit();
 
-// Włączanie / wyłączanie analizatora z poziomu serwera www
-// (np. po kliknięciu checkboxa na stronie)
+// Włącza/wyłącza analizator z WWW i ustawia zakres stylów (0..4 lub 0..6)
 void eqAnalyzerSetFromWeb(bool enabled);
 
-// Rysowanie OLED – Styl 5 (pełne słupki + zegar + głośnik)
+// Style 5 i 6 (analizator)
 void vuMeterMode5();
-
-// Rysowanie OLED – Styl 6 (cienkie „kreseczki” + peak + zegar)
 void vuMeterMode6();
+
