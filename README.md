@@ -16,5 +16,8 @@ Mała poprawka edycji stylu 5 mozliwośc wyboru wysokości segmenty słupka
 
 <img width="420" height="915" alt="image" src="https://github.com/user-attachments/assets/27f7566c-265b-4a80-82b6-c957ddb6a889" />
 
+<img width="532" height="834" alt="image" src="https://github.com/user-attachments/assets/7acff69a-8d28-4afc-8e68-bdb5b763d73c" />
+
+
 
 
