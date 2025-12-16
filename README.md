@@ -9,7 +9,7 @@ Mała poprawka kosmetyczna z umiejcowieniem napisu MUTED.
 
 <img width="637" height="828" alt="image" src="https://github.com/user-attachments/assets/0ca1a80e-82b0-40d6-991d-797beb58a5a7" 
   
-Wchodzimy w opcje edycji wpisując IP_radyjka/analyzer  np. http://192_168_2_100/analyzer
+Wchodzimy w opcje edycji wpisując IP_radyjka/analyzer  np. http://192_168_2_100/analyzer   Mała poprawka edycji stylu 5 mozliwośc wyboru wysokości segmenty słupka 
 
 
 <img width="420" height="915" alt="image" src="https://github.com/user-attachments/assets/27f7566c-265b-4a80-82b6-c957ddb6a889" />
