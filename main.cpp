@@ -9091,6 +9091,7 @@ server.on("/analyzerSave", HTTP_POST, [](AsyncWebServerRequest *request){
   c.s5_barWidth = (uint8_t)getInt("s5w", c.s5_barWidth);
   c.s5_barGap   = (uint8_t)getInt("s5g", c.s5_barGap);
   c.s5_segments = (uint8_t)getInt("s5seg", c.s5_segments);
+  c.s5_segHeight = (uint8_t)getInt("s5segH", c.s5_segHeight);
   c.s5_fill     = getFloat("s5fill", c.s5_fill);
   c.s5_showPeaks = getBool("s5peaks");
 
@@ -9153,6 +9154,7 @@ server.on("/analyzerApply", HTTP_POST, [](AsyncWebServerRequest *request){
   c.s5_barWidth = (uint8_t)getInt("s5w", c.s5_barWidth);
   c.s5_barGap   = (uint8_t)getInt("s5g", c.s5_barGap);
   c.s5_segments = (uint8_t)getInt("s5seg", c.s5_segments);
+  c.s5_segHeight = (uint8_t)getInt("s5segH", c.s5_segHeight);
   c.s5_fill     = getFloat("s5fill", c.s5_fill);
   c.s5_showPeaks = getBool("s5peaks");
 

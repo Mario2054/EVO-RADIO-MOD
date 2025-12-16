@@ -87,6 +87,7 @@ void analyzerSetStyle(const AnalyzerStyleCfg& in)
   c.s5_barGap   = clampU8(c.s5_barGap,   0, 20);
   c.s5_segments = clampU8(c.s5_segments,  4, 48);
   c.s5_fill     = clampF(c.s5_fill,     0.10f, 1.00f);
+  c.s5_segHeight = clampU8(c.s5_segHeight, 1, 4);
 
   // Styl 6
   c.s6_gap    = clampU8(c.s6_gap,    0, 10);
@@ -161,6 +162,7 @@ void analyzerStyleLoad()
     else if (k == "s5g")    c.s5_barGap   = (uint8_t)v.toInt();
     else if (k == "s5seg")  c.s5_segments = (uint8_t)v.toInt();
     else if (k == "s5fill") c.s5_fill     = v.toFloat();
+    else if (k == "s5segH") c.s5_segHeight = (uint8_t)v.toInt();
     else if (k == "s5peaks") c.s5_showPeaks = v.toInt() != 0;
 
     // Styl 6
@@ -211,6 +213,7 @@ void analyzerStyleSave()
   f.printf("s5g=%u\n", g_cfg.s5_barGap);
   f.printf("s5seg=%u\n", g_cfg.s5_segments);
   f.printf("s5fill=%.3f\n", g_cfg.s5_fill);
+  f.printf("s5segH=%u\n", g_cfg.s5_segHeight);
   f.printf("s5peaks=%u\n", g_cfg.s5_showPeaks ? 1 : 0);
 
   f.println("# Style6");
@@ -338,6 +341,7 @@ String analyzerBuildHtmlPage()
   s += "<div class='row'><label>bar width</label><input name='s5w' type='number' min='2' max='30' value='" + String(g_cfg.s5_barWidth) + "'></div>";
   s += "<div class='row'><label>bar gap</label><input name='s5g' type='number' min='0' max='20' value='" + String(g_cfg.s5_barGap) + "'></div>";
   s += "<div class='row'><label>segments</label><input name='s5seg' type='number' min='4' max='48' value='" + String(g_cfg.s5_segments) + "'></div>";
+  s += "<div class='row'><label>segment height</label><input name='s5segH' type='number' min='1' max='4' value='" + String(g_cfg.s5_segHeight) + "'></div>";
   s += "<div class='row'><label>fill (0.1..1)</label><input step='0.05' name='s5fill' type='number' min='0.1' max='1.0' value='" + String(g_cfg.s5_fill,2) + "'></div>";
   s += "<div class='row'><label>show peaks</label><input name='s5peaks' type='checkbox' value='1' " + String(g_cfg.s5_showPeaks ? "checked" : "") + "></div>";
   s += "</div>";
@@ -637,11 +641,9 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
     // x słupka
     int16_t x = startX + i * (barWidth + barGap);
 
-    // Rysujemy segmenty od dołu - wszystkie segmenty identyczne
+    // Rysujemy segmenty od dołu - używamy konfigurowalnej wysokości segmentu
     uint8_t segmentGap = 1;  // 1 piksel przerwy między segmentami
-    int16_t availableHeight = eqMaxHeight - (maxSegments - 1) * segmentGap;
-    uint8_t segmentHeight = (availableHeight > 0) ? (availableHeight / maxSegments) : 1;
-    if (segmentHeight < 1) segmentHeight = 1;  // Minimum 1 piksel wysokości
+    uint8_t segmentHeight = g_cfg.s5_segHeight;  // Konfigurowalna wysokość segmentu
     
     for (uint8_t s = 0; s < segments; s++)
     {

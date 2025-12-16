@@ -33,6 +33,7 @@ struct AnalyzerStyleCfg {
   uint8_t s5_barWidth = 10;     // szerokość słupka (px) 4-16
   uint8_t s5_barGap   = 6;      // przerwa między słupkami (px) 1-8
   uint8_t s5_segments = 32;     // ilość segmentów w pionie 16-64
+  uint8_t s5_segHeight = 2;     // wysokość segmentu (px) 1-4
   float   s5_fill     = 0.60f;  // wypełnienie segmentu (0.1..1.0)
   uint8_t s5_peakHeight = 2;    // wysokość peak hold (px) 1-4
   uint8_t s5_peakGap = 1;       // odstęp peak od słupka (px) 0-3
