@@ -9844,7 +9844,7 @@ void loop()
       eq_analyzer_set_runtime_active(false);
     }
 
-    // Tylko starsze style (0-4) pokazują napis MUTED - nowe style 5-9 mają swoją obsługę mute
+    // Tylko starsze style (0-4) pokazują napis MUTED - nowe style 5 i 6 mają swoją obsługę mute za ikonką głośnika
     if (volumeMute && displayMode >= 0 && displayMode <= 4) 
     {
       u8g2.setDrawColor(0);

@@ -306,8 +306,9 @@ static String htmlHeader(const char* title)
   s += ".box{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}";
   s += ".row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}";
   s += "label{min-width:120px} input{width:90px;padding:6px}";
-  s += "button{padding:10px 12px;border:0;border-radius:10px;background:#222;color:#fff;cursor:pointer}";
+  s += "button{padding:10px 12px;border:0;border-radius:10px;background:#222;color:#fff;cursor:pointer;margin:2px}";
   s += "button.secondary{background:#555} a{color:#0a58ca}";
+  s += ".preset-form{display:inline-block;margin:2px}";
   s += "</style></head><body>";
   return s;
 }
@@ -325,10 +326,10 @@ String analyzerBuildHtmlPage()
   // Presety na górze
   s += "<div class='box'><h3>Presety</h3>";
   s += "<div class='row'>";
-  s += "<button formaction='/analyzerPreset' name='preset' value='0' type='submit'>Klasyczny</button>";
-  s += "<button formaction='/analyzerPreset' name='preset' value='1' type='submit'>Nowoczesny</button>";
-  s += "<button formaction='/analyzerPreset' name='preset' value='2' type='submit'>Kompaktowy</button>";
-  s += "<button formaction='/analyzerPreset' name='preset' value='3' type='submit'>Retro</button>";
+  s += "<form method='POST' action='/analyzerPreset' class='preset-form'><button name='preset' value='0' type='submit'>Klasyczny</button></form>";
+  s += "<form method='POST' action='/analyzerPreset' class='preset-form'><button name='preset' value='1' type='submit'>Nowoczesny</button></form>";
+  s += "<form method='POST' action='/analyzerPreset' class='preset-form'><button name='preset' value='2' type='submit'>Kompaktowy</button></form>";
+  s += "<form method='POST' action='/analyzerPreset' class='preset-form'><button name='preset' value='3' type='submit'>Retro</button></form>";
   s += "</div></div>";
 
   s += "<form method='POST'>";
@@ -588,10 +589,14 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
     u8g2.drawPixel(iconX + 9,  iconY + 7);
   }
 
-  // Wartość głośności
+  // Wartość głośności lub napis MUTED
   u8g2.setFont(u8g2_font_5x8_mr);
   u8g2.setCursor(iconX + 14, 10);
-  u8g2.print(volumeValue);
+  if (volumeMute) {
+    u8g2.print("MUTED");
+  } else {
+    u8g2.print(volumeValue);
+  }
 
   // Linia oddzielająca pasek od słupków
   u8g2.drawHLine(0, 13, 256);  // SCREEN_WIDTH = 256
@@ -662,17 +667,6 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
         u8g2.drawBox(x, peakY, barWidth, 1);
       }
     }
-  }
-
-  // Komunikat o wyciszeniu – na środku
-  if (volumeMute)
-  {
-    u8g2.setFont(u8g2_font_6x12_tf);
-    u8g2.setDrawColor(0);
-    u8g2.drawBox(60, (64/2) - 10, 256-120, 20);  // SCREEN_HEIGHT = 64, SCREEN_WIDTH = 256
-    u8g2.setDrawColor(1);
-    u8g2.setCursor((64/2) - 30, (64/2) + 4);  // SCREEN_HEIGHT = 64
-    u8g2.print("MUTED");
   }
 
   u8g2.sendBuffer();
@@ -831,9 +825,14 @@ void vuMeterMode6() // Tryb 6: 16 słupków z cienkich „kreseczek" + peak, pe�
     u8g2.drawPixel(iconX + 9,  iconY + 7);
   }
 
+  // Wartość głośności lub napis MUTED
   u8g2.setFont(u8g2_font_5x8_mr);
   u8g2.setCursor(iconX + 14, 10);
-  u8g2.print(volumeValue);
+  if (volumeMute) {
+    u8g2.print("MUTED");
+  } else {
+    u8g2.print(volumeValue);
+  }
 
   u8g2.drawHLine(0, 13, 256);  // SCREEN_WIDTH = 256
 
@@ -896,16 +895,6 @@ void vuMeterMode6() // Tryb 6: 16 słupków z cienkich „kreseczek" + peak, pe�
         u8g2.drawBox(x, peakY, barWidth, 1);  // 1 piksel wysokości peak - cienka kreska
       }
     }
-  }
-
-  if (volumeMute)
-  {
-    u8g2.setFont(u8g2_font_6x12_tf);
-    u8g2.setDrawColor(0);
-    u8g2.drawBox(60, (64/2) - 10, 256-120, 20);  // SCREEN_HEIGHT = 64, SCREEN_WIDTH = 256
-    u8g2.setDrawColor(1);
-    u8g2.setCursor((64/2) - 30, (64/2) + 4);  // SCREEN_HEIGHT = 64
-    u8g2.print("MUTED");
   }
 
   u8g2.sendBuffer();
