@@ -1,22 +1,16 @@
 # EVO-RADIO-MOD
 Wersja oprogramwania opata o projkt EVO3 https://github.com/dzikakuna/ESP32_radio_evo3 po małych modyfikacjach .
-Dodano dodatkowy styl 5 i 6 wyświetlania w postaci słupków analizatora rzeczywistego.
-Projekt opiera się na dodatkowych plikach z małymi zmianami w orginalnym main.
+Dodano dodatkowy opcje do EVO3 Dodano obsługę BT nadajnik ze stony ip/bt obsługa softu drugiego SEP23Wrom programwanie poprzez arduino 
+Dodano prosty pleyer plików audio z kartySD 
+poniżej widać menu głowne z nowymi finkcjami 
+<img width="689" height="910" alt="image" src="https://github.com/user-attachments/assets/23efd4a8-2a67-4191-85f1-1051bbf8e0a8" />
 
-Poprawka do załaczenia trybów 5 i 6 do 9 dodatkowa opcjach Setingu .Dodatkowe menu do ustawiania własnych styli słupków.Poprawiono działanie analizatora na FLAC i poprawiono dynamikę analizatora .
-Mała poprawka kosmetyczna z umiejcowieniem napisu MUTED.
+Panel do obsługi sdplayera ze strony ip/sdplayer
 
-
-<img width="637" height="828" alt="image" src="https://github.com/user-attachments/assets/0ca1a80e-82b0-40d6-991d-797beb58a5a7" 
-  
-Wchodzimy w opcje edycji wpisując IP_radyjka/analyzer  np. http://192_168_2_100/analyzer  
-
-Mała poprawka edycji stylu 5 mozliwośc wyboru wysokości segmenty słupka 
-
-
-<img width="420" height="915" alt="image" src="https://github.com/user-attachments/assets/27f7566c-265b-4a80-82b6-c957ddb6a889" />
-
-<img width="532" height="834" alt="image" src="https://github.com/user-attachments/assets/7acff69a-8d28-4afc-8e68-bdb5b763d73c" />
+<img width="1336" height="895" alt="image" src="https://github.com/user-attachments/assets/002a9a94-b4c3-4406-95de-f851f7783bbe" />
+Stona Do obsługi BT Nadajnika Audio 
+do pracy ttrzeba pozmieniać ustawienia w sofcie BT nadajnika ESP32Wrom teraz saustawione MODE TX  Volume na 100 BOoST na 40 po wyedytowniu mozna obsługiwać juz ze stony jeszczenie testowałem .Obecnie soft BT ESO32 Wrom startuje odrazu ppo podłączeniu zasilania szuka odbiornika BT i automatycznie sie z nim łączy .
+<img width="783" height="887" alt="image" src="https://github.com/user-attachments/assets/bceb99de-1ccc-4478-b774-1ee62399c4ee" />
 
 
 
