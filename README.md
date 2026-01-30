@@ -29,8 +29,7 @@ static uint8_t g_vol_127 = 127;
 // BOOST: 100..400 (%)
 static int g_boost_pct = 400; 
 
-Tak trzeba to zmienić do obsługi strony BT
-
+Tak trzeba to zmienić w sofcie BT ESP32WROM do obsługi strony BT
 
 enum Mode : uint8_t { MODE_OFF=0, MODE_TX=1, MODE_AUTO=2 };
 static volatile Mode g_mode = MODE_OFF;
