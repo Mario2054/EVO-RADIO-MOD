@@ -1,8 +1,10 @@
 # EVO-RADIO-MOD
 Wersja oprogramwania opata o projkt EVO3 https://github.com/dzikakuna/ESP32_radio_evo3 po małych modyfikacjach .
-Dodano dodatkowy opcje do EVO3 Dodano obsługę BT nadajnik ze stony ip/bt obsługa softu drugiego SEP23Wrom programwanie poprzez arduino 
+Dodano dodatkowy opcje do EVO3 
+Dodano obsługę BT nadajnik ze stony ip/bt obsługa softu drugiego SEP23Wrom programwanie poprzez arduino 
 Dodano prosty pleyer plików audio z kartySD 
-poniżej widać menu głowne z nowymi finkcjami 
+
+ menu głowne z nowymi funkcjami 
 <img width="689" height="910" alt="image" src="https://github.com/user-attachments/assets/23efd4a8-2a67-4191-85f1-1051bbf8e0a8" />
 
 Panel do obsługi sdplayera ze strony ip/sdplayer
