@@ -11,7 +11,40 @@ Panel do obsługi sdplayera ze strony ip/sdplayer
 Stona Do obsługi BT Nadajnika Audio 
 do pracy ttrzeba pozmieniać ustawienia w sofcie BT nadajnika ESP32Wrom teraz saustawione MODE TX  Volume na 100 BOoST na 40 po wyedytowniu mozna obsługiwać juz ze stony jeszczenie testowałem .Obecnie soft BT ESO32 Wrom startuje odrazu ppo podłączeniu zasilania szuka odbiornika BT i automatycznie sie z nim łączy .
 <img width="783" height="887" alt="image" src="https://github.com/user-attachments/assets/bceb99de-1ccc-4478-b774-1ee62399c4ee" />
+W sofie od BT nadajnika ESP32Wrom takie sa ustawienia do automatycznej pracy 
+
+enum Mode : uint8_t { MODE_OFF=0, MODE_TX=1, MODE_AUTO=2 };
+static volatile Mode g_mode = MODE_TX;
+
+static bool g_btReady = false;
+static bool g_scanning = false;
+
+static String g_connMac = "";
+static String g_connName = "";
+
+// VOL: 0..100
+static int g_vol_ui = 100;
+static uint8_t g_vol_127 = 127;
+
+// BOOST: 100..400 (%)
+static int g_boost_pct = 400; 
+
+Tak trzeba to zmienić do obsługi strony BT
 
 
+enum Mode : uint8_t { MODE_OFF=0, MODE_TX=1, MODE_AUTO=2 };
+static volatile Mode g_mode = MODE_OFF;
 
+static bool g_btReady = false;
+static bool g_scanning = false;
+
+static String g_connMac = "";
+static String g_connName = "";
+
+// VOL: 0..100
+static int g_vol_ui = 50;
+static uint8_t g_vol_127 = 64;
+
+// BOOST: 100..400 (%)
+static int g_boost_pct = 100;
 
