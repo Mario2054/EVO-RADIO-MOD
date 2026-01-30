@@ -11,7 +11,8 @@ Panel do obsługi sdplayera ze strony ip/sdplayer
 
 <img width="1336" height="895" alt="image" src="https://github.com/user-attachments/assets/002a9a94-b4c3-4406-95de-f851f7783bbe" />
 Stona Do obsługi BT Nadajnika Audio 
-do pracy ttrzeba pozmieniać ustawienia w sofcie BT nadajnika ESP32Wrom teraz saustawione MODE TX  Volume na 100 BOoST na 40 po wyedytowniu mozna obsługiwać juz ze stony jeszczenie testowałem .Obecnie soft BT ESO32 Wrom startuje odrazu ppo podłączeniu zasilania szuka odbiornika BT i automatycznie sie z nim łączy .
+do pracy trzeba pozmieniać ustawienia w sofcie BT nadajnika ESP32Wrom teraz saustawione MODE TX  Volume na 100 BOoST na 400 po wyedytowniu mozna obsługiwać juz ze stony jeszczenie testowałem .
+Obecnie soft BT ESP32 Wrom startuje odrazu po podłączeniu zasilania szuka odbiornika BT i automatycznie sie z nim łączy .
 <img width="783" height="887" alt="image" src="https://github.com/user-attachments/assets/bceb99de-1ccc-4478-b774-1ee62399c4ee" />
 W sofie od BT nadajnika ESP32Wrom takie sa ustawienia do automatycznej pracy 
 
