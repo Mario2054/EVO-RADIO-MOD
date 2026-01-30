@@ -50,3 +50,45 @@ static uint8_t g_vol_127 = 64;
 // BOOST: 100..400 (%)
 static int g_boost_pct = 100;
 
+Podłaczenie BT od ESp32S3 n16 R8 
+1) I2S (podsłuch audio z ESP32-S3)
+
+To jest najważniejsze dla dźwięku po BT.
+
+Na ESP32-S3 (Twoje radio):
+
+BCLK = GPIO12
+
+WS/LRCLK = GPIO14
+
+DATA (DOUT z S3 do DAC) = GPIO13
+
+Podłącz to równolegle do WROOM:
+
+ESP32-S3 GPIO12 (BCLK) → WROOM GPIO26 (PIN_I2S_BCLK)
+ESP32-S3 GPIO14 (WS) → WROOM GPIO25 (PIN_I2S_WS)
+ESP32-S3 GPIO13 (DATA) → WROOM GPIO22 (PIN_I2S_DIN)
+GND S3 ↔ GND WROOM
+
+To działa tak, że S3 dalej karmi PCM5102A, a WROOM tylko “podsłuchuje”.
+
+2) UART sterowanie (S3 ↔ WROOM)
+
+Do wysyłania komend SCAN/CONNECT itd.
+
+ESP32-S3 TX → WROOM GPIO16 (PIN_UART_RX)
+ESP32-S3 RX ← WROOM GPIO17 (PIN_UART_TX)
+GND S3 ↔ GND WROOM
+
+Baud: 115200
+
+3) Zasilanie i masa
+
+GND musi być wspólne (inaczej UART i I2S będą wariować).
+
+WROOM zasilasz normalnie z płytki (USB) albo stabilne 3.3V (jeśli goły moduł, to już trzeba przetwornicę i kondensatory).
+
+4) Mega ważne: poziomy napięć
+
+UART i I2S muszą być 3.3V. Nie dawaj 5V na piny.
+
