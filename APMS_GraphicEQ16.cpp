@@ -204,7 +204,8 @@ void EQ16_resetAllBands(void) {
     for(uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
         APMS_EQ16::setBand(i, 0); // Set all bands to 0dB
     }
-    g_needsSave = true;
+    EQ16_saveToSD();  // Automatyczny zapis po resecie
+    Serial.println("EQ16: All bands reset to 0dB and saved to SD");
 }
 
 bool EQ16_isMenuActive(void) {
@@ -495,8 +496,8 @@ void EQ16_loadPreset(uint8_t presetId) {
         for(uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
             APMS_EQ16::setBand(i, presets[presetId][i]);
         }
-        g_needsSave = true;
-        Serial.printf("EQ16: Loaded preset %d\n", presetId);
+        EQ16_saveToSD();  // Automatyczny zapis po załadowaniu presetu
+        Serial.printf("EQ16: Loaded preset %d and saved to SD\n", presetId);
     }
 }
 

@@ -1,6 +1,5 @@
 #include "EQ_AnalyzerDisplay.h"
 #include "EQ_FFTAnalyzer.h"
-#include "BT_KCX_Module.h"
 
 #include <FS.h>
 #include <U8g2lib.h>
@@ -766,9 +765,6 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
   // Ikonka głośnika + wartość głośności po prawej
   uint8_t iconY = 2;
   uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
-  
-  // Ikona statusu Bluetooth - przed ikonką głośnika
-  BT_drawStatusIcon(u8g2, iconX - 18, 11);
 
   // „kolumna" głośnika
   u8g2.drawBox(iconX, iconY + 2, 4, 7);
@@ -1043,9 +1039,6 @@ void vuMeterMode6() // Tryb 6: 16 słupków z cienkich „kreseczek" + peak, pe�
   // Ikonka głośnika po prawej
   uint8_t iconY = 2;
   uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
-  
-  // Ikona statusu Bluetooth - przed ikonką głośnika
-  BT_drawStatusIcon(u8g2, iconX - 18, 11);
 
   u8g2.drawBox(iconX, iconY + 2, 4, 7);
   u8g2.drawLine(iconX + 4, iconY + 2, iconX + 7, iconY);
