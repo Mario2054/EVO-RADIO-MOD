@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TEST</title>
+</head>
+<body>
+<h1>SD Player TEST</h1>
+<div id="status">Testing...</div>
+<div id="data"></div>
+<script>
+alert('JavaScript works!');
+fetch('/sdplayer/api/list')
+  .then(r => r.json())
+  .then(d => {
+    alert('Got data: ' + JSON.stringify(d));
+    document.getElementById('data').innerText = JSON.stringify(d, null, 2);
+  })
+  .catch(e => alert('Error: ' + e.message));
+</script>
+</body>
+</html>
