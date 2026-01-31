@@ -1,0 +1,8 @@
+body{font-family:system-ui,Arial;margin:0;padding:0}
+header{padding:12px;border-bottom:1px solid #ddd}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+button{padding:10px 12px}
+#list{list-style:none;margin:0;padding:0}
+#list li{padding:12px;border-bottom:1px solid #eee;cursor:pointer}
+#list li:hover{background:#f7f7f7}
+#list li.dir{font-weight:600}
