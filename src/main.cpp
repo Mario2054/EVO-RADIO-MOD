@@ -175,7 +175,7 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
 #define MAX_STATIONS 99          // Maksymalna liczba stacji radiowych, które mogą być przechowywane w jednym banku
 #define STATION_NAME_LENGTH 220  // Nazwa stacji wraz z bankiem i numerem stacji do wyświetlenia w pierwszej linii na ekranie
 #define MAX_FILES 100            // Maksymalna liczba plików lub katalogów w tablicy directoriesz
-#define bank_nr_max 16           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
+#define bank_nr_max 17           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
 // Konfiguracja stylów analizatora
 uint8_t analyzerStylesMode = 2;     // 0=0-4-5, 1=0-4-6, 2=0-4-5-6-7-8-9 (wszystkie)
 uint8_t analyzerCurrentPreset = 0;  // Aktualny preset analizatora (0-4)
@@ -2737,7 +2737,7 @@ void fetchStationsFromServer()
       url = STATIONS_URL16;
       break;
     case 17:
-      url = STATIONS_URL17;  // Bank niewykorzystany
+      url = STATIONS_URL17;
       break;
     case 18:
       url = STATIONS_URL18;  // Bank niewykorzystany

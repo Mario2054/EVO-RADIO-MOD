@@ -542,13 +542,8 @@ void SDPlayerOLED::selectCurrent() {
         // Ustaw flagę że muzyka z SD jest odtwarzana
         sdPlayerPlayingMusic = true;
         
-        // Automatycznie wyjdź z panelu SD Player i pokaż style radia
-        sdPlayerOLEDActive = false;
-        Serial.println("DEBUG: Music started from SD - switching to radio display mode");
-        
-        // Odśwież wyświetlacz - pokaż style radia
-        displayRadio();
-        u8g2.sendBuffer();
+        // POZOSTAJEMY w panelu SD Player OLED - nie wychodzimy automatycznie
+        Serial.println("DEBUG: Music started from SD - staying in SD Player panel");
     }
 }
 
