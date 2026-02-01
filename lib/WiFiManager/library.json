@@ -1,0 +1,9 @@
+{
+    "name": "WiFiManager",
+    "version": "2.0.17",
+    "keywords": "wifi, configuration, captive portal, esp32, esp8266",
+    "description": "WiFiManager library for ESP8266/ESP32 with web configuration portal.",
+    "frameworks": "arduino",
+    "platforms": ["espressif32", "espressif8266"],
+    "srcDir": "."
+}
