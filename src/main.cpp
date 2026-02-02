@@ -32,12 +32,17 @@
 #include "Audio.h"             // Local Audio class
 
 // ========================================================================
-// EQUALIZER FFT ANALYZER - Warunkowa kompilacja
-// Aby wyłączyć: zmień -DENABLE_EQUALIZER=1 na =0 w platformio.ini
+// FFT ANALYZER & GRAPHIC EQUALIZER - Warunkowa kompilacja
+// Konfiguracja w platformio.ini:
+//   -DENABLE_FFT_ANALYZER=1/0  - Analizator widma (VU styles 5-10)
+//   -DENABLE_EQ16=1/0          - Equalizer 16-pasmowy
 // ========================================================================
-#ifdef ENABLE_EQUALIZER
-  #include "EQ_AnalyzerDisplay.h"  // FFT analyzer (styles 5/6)
-  #include "EQ_FFTAnalyzer.h"      // FFT analyzer functions
+#ifdef ENABLE_FFT_ANALYZER
+  #include "EQ_AnalyzerDisplay.h"  // FFT analyzer display (styles 5/6)
+  #include "EQ_FFTAnalyzer.h"      // FFT analyzer core functions
+#endif
+
+#ifdef ENABLE_EQ16
   #include "EQ16_GraphicEQ.h"      // 16-Band Graphic Equalizer
 #endif
 
@@ -3328,7 +3333,7 @@ void switchEqualizerSystem() {
 void audio_process_i2s(int16_t* outBuff, int32_t validSamples, bool* continueI2S)
 {
   // Push audio samples to EQ analyzer (validSamples is number of stereo frames)
-  #ifdef ENABLE_EQUALIZER
+  #ifdef ENABLE_FFT_ANALYZER
     eq_analyzer_push_samples_i16((const int16_t*)outBuff, validSamples);
   #endif
   
@@ -3389,7 +3394,7 @@ void my_audio_info(Audio::msg_t m)
       if (msg.indexOf("Error") != -1 || msg.indexOf("error") != -1) {
         Serial.printf("[AUDIO ERROR] %s\n", msg.c_str());
         // Reset analizatora przy błędzie
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_reset();
         #endif
       }
@@ -3450,7 +3455,7 @@ void my_audio_info(Audio::msg_t m)
         SampleRate = SampleRate / 1000;
         
         // Ustaw sample rate w analizatorze
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_sample_rate(fullSampleRate);
         #endif
         Serial.printf("[AUDIO] Sample Rate detected: %u Hz\n", fullSampleRate);
@@ -3482,7 +3487,7 @@ void my_audio_info(Audio::msg_t m)
         flac = false; aac = false; vorbis = false; opus = false;
         streamCodec = "MP3";
         Serial.println("[AUDIO] Codec: MP3 detected");
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_flac_mode(false);
         #endif
         f_audioInfoRefreshDisplayRadio = true; // refresh displayRadio screen
@@ -3495,7 +3500,7 @@ void my_audio_info(Audio::msg_t m)
         streamCodec = "FLAC";
         Serial.println("[AUDIO] Codec: FLAC detected");
         // Resetuj analizator dla nowego formatu i włącz tryb FLAC
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_flac_mode(true);
           eq_analyzer_reset();
         #endif
@@ -3509,7 +3514,7 @@ void my_audio_info(Audio::msg_t m)
         streamCodec = "AAC";
         Serial.println("[AUDIO] Codec: AAC detected");
         // Resetuj analizator dla nowego formatu
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_flac_mode(false);
           eq_analyzer_reset();
         #endif
@@ -3522,7 +3527,7 @@ void my_audio_info(Audio::msg_t m)
         aac = false; flac = false; mp3 = false; opus = false;
         streamCodec = "VRB";
         Serial.println("[AUDIO] Codec: VORBIS detected");
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_flac_mode(false);
           eq_analyzer_reset();
         #endif
@@ -3535,7 +3540,7 @@ void my_audio_info(Audio::msg_t m)
         aac = false; flac = false; mp3 = false; vorbis = false;
         streamCodec = "OPUS";
         Serial.println("[AUDIO] Codec: OPUS detected");
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_flac_mode(false);
           eq_analyzer_reset();
         #endif
@@ -3553,7 +3558,7 @@ void my_audio_info(Audio::msg_t m)
       // Sprawdź czy to błąd na podstawie treści logu
       if (strstr(m.msg, "error") || strstr(m.msg, "Error") || strstr(m.msg, "ERROR") ||
           strstr(m.msg, "failed") || strstr(m.msg, "Failed") || strstr(m.msg, "FAILED")) {
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_reset();  // Reset analizatora przy błędzie
         #endif
       }
@@ -8529,7 +8534,7 @@ void setup()
   readConfig();
   // Wczytaj osobny config wyglądu analizatora (/analyzer)
   analyzerStyleLoad();
-  #ifdef ENABLE_EQUALIZER
+  #ifdef ENABLE_FFT_ANALYZER
     eq_analyzer_init();
     eq_analyzer_set_enabled(eqAnalyzerOn);   // Set initial state from config
   #endif
@@ -9695,24 +9700,24 @@ server.on("/analyzerCfg", HTTP_GET, [](AsyncWebServerRequest *request){
 
 // Diagnostyka analizatora
 server.on("/analyzerDiag", HTTP_GET, [](AsyncWebServerRequest *request){
-  #ifdef ENABLE_EQUALIZER
+  #ifdef ENABLE_FFT_ANALYZER
     eq_analyzer_print_diagnostics();
     String diag = "Diagnostics printed to Serial. Check console.";
     request->send(200, "text/plain", diag);
   #else
-    request->send(200, "text/plain", "Equalizer disabled in build");
+    request->send(200, "text/plain", "FFT Analyzer disabled in build");
   #endif
 });
 
 // Test generator toggle
 server.on("/analyzerTest", HTTP_GET, [](AsyncWebServerRequest *request){
-  #ifdef ENABLE_EQUALIZER
+  #ifdef ENABLE_FFT_ANALYZER
     bool currentState = false; // Należy dodać getter dla stanu test generatora
     eq_analyzer_enable_test_generator(!currentState);
     String status = currentState ? "Test generator DISABLED" : "Test generator ENABLED";
     request->send(200, "text/plain", status);
   #else
-    request->send(200, "text/plain", "Equalizer disabled in build");
+    request->send(200, "text/plain", "FFT Analyzer disabled in build");
   #endif
 });
 
@@ -10665,7 +10670,7 @@ void loop()
           if (displayMode == 10) {vuMeterMode10();}
         }
         // Analizator musi działać dla EQ16
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           eq_analyzer_set_runtime_active(true);
         #endif
       } else {
@@ -10698,7 +10703,7 @@ void loop()
         if (displayMode == 10) {vuMeterMode10();} // Nowy styl: Floating Peaks - Ulatujące szczyty
           
         // Powiedz analizatorowi, że ma spać gdy style 5-10 nie są aktywne
-        #ifdef ENABLE_EQUALIZER
+        #ifdef ENABLE_FFT_ANALYZER
           if (displayMode < 5 || displayMode > 10) {
             eq_analyzer_set_runtime_active(false);
           }
