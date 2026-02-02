@@ -1,6 +1,27 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
 Dodaje modyfikacje do projektu EVO3 
 
+========================================================================
+FFT ANALYZER & GRAPHIC EQUALIZER - WŁĄCZANIE/WYŁĄCZANIE
+========================================================================
+ENABLE_FFT_ANALYZER - Analizator widma FFT (VU meter style 5-10)
+  1 = WŁĄCZONY  - Wyświetlanie spectrum audio
+  0 = WYŁĄCZONY - Tylko style VU meter 0-4
+  Koszt: ~25KB RAM, ~20% CPU Core1
+	; 
+
+ENABLE_EQ16 - Graficzny equalizer 16-pasmowy (modyfikacja audio)
+  1 = WŁĄCZONY  - Możliwość kształtowania dźwięku przez 16 pasm
+  0 = WYŁĄCZONY - Tylko 3-punktowy equalizer (bass/mid/treble)
+  Koszt: ~15KB RAM, ~10% CPU podczas przetwarzania
+	; 
+
+ZALECANE USTAWIENIA:
+  Tylko widmo:     FFT=1, EQ16=0  (oszczędność CPU na EQ)
+  Pełna kontrola:  FFT=1, EQ16=1  (wszystko włączone)
+  Minimum:         FFT=0, EQ16=0  (maksymalna wydajność)
+========================================================================
+
 
 <img width="380" height="880" alt="image" src="https://github.com/user-attachments/assets/09441cda-3d18-46ff-8f9d-7c14e1d5918f" />
 
