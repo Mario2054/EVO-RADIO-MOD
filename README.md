@@ -21,6 +21,7 @@ ZALECANE USTAWIENIA:
   Pełna kontrola:  FFT=1, EQ16=1  (wszystko włączone)
   Minimum:         FFT=0, EQ16=0  (maksymalna wydajność)
 
+Tak ma ygladać bibioteka audio w arduino <img width="840" height="412" alt="image" src="https://github.com/user-attachments/assets/5c69bd33-fc60-4166-a67a-1ea5694cad90" />
 
 
 <img width="380" height="880" alt="image" src="https://github.com/user-attachments/assets/09441cda-3d18-46ff-8f9d-7c14e1d5918f" />
