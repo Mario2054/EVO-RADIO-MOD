@@ -1,0 +1,10 @@
+Arduino IDE 2.3.6
+
+Lib list:
+ESP32 3.2.0
+AsyncTCP 3.3.6
+ESP Asunc WebServer 3.7.2
+ESP-audioI2S-master 3.4.3 with newest commits (26.10.2025) + recompiled wip, netif
+U8g2 2.36.5
+WiFiManager 2.0.17
+ezButton 1.0.4

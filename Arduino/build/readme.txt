@@ -1,0 +1,1 @@
+Builded file for OTA is always for SSD1322, single encoder.
