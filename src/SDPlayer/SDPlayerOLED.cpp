@@ -22,8 +22,12 @@ SDPlayerOLED::SDPlayerOLED(U8G2& display)
       _splashStartTime(0),
       _volumeShowTime(0),
       _lastUpdate(0),
+      _lastSrcPressTime(0),
+      _srcClickCount(0),
       _scrollPosition(0),
-      _animFrame(0) {
+      _animFrame(0),
+      _scrollTextOffset(0),
+      _lastScrollTime(0) {
 }
 
 void SDPlayerOLED::begin(SDPlayerWebUI* player) {
@@ -185,7 +189,63 @@ void SDPlayerOLED::renderVolume() {
 }
 
 void SDPlayerOLED::renderStyle1() {
-    drawTopBar();
+    // STYL 1: LISTA UTWORÓW
+    // Górny pasek: Zegar | Data | Format Audio | Głośnik+Volume
+    // Linia separacyjna
+    // Lista plików z nawigacją
+    
+    if (!_player) return;
+    
+    _display.setFont(u8g2_font_6x10_tr);
+    
+    // === GÓRNY PASEK ===
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 100)) {
+        // 1. ZEGAR PO LEWEJ (HH:MM)
+        char timeStr[6];
+        snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        _display.drawStr(2, 11, timeStr);
+        
+        // 2. DATA W ŚRODKU (DD.MM.YYYY)
+        char dateStr[12];
+        snprintf(dateStr, sizeof(dateStr), "%02d.%02d.%04d", 
+                 timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+        int dateWidth = _display.getStrWidth(dateStr);
+        int dateCenterX = (256 - dateWidth) / 2;
+        _display.drawStr(dateCenterX, 11, dateStr);
+        
+        // 3. FORMAT AUDIO Z PRAWEJ (MP3, FLAC, itp.)
+        String currentFile = _player->getCurrentFile();
+        String audioFormat = "";
+        if (currentFile.length() > 0 && currentFile != "None") {
+            int dotPos = currentFile.lastIndexOf('.');
+            if (dotPos > 0) {
+                audioFormat = currentFile.substring(dotPos + 1);
+                audioFormat.toUpperCase();
+            }
+        }
+        
+        // 4. IKONKA GŁOŚNICZKA + VOLUME
+        int vol = _player->getVolume();
+        String volStr = String(vol);
+        int volWidth = _display.getStrWidth(volStr.c_str());
+        
+        int speakerX = 256 - volWidth - 20;
+        drawVolumeIcon(speakerX, 3);
+        _display.drawStr(speakerX + 14, 11, volStr.c_str());
+        
+        // Format audio przed głośnikiem
+        if (audioFormat.length() > 0) {
+            int formatWidth = _display.getStrWidth(audioFormat.c_str());
+            int formatX = speakerX - formatWidth - 8;
+            _display.drawStr(formatX, 11, audioFormat.c_str());
+        }
+    }
+    
+    // === CIENKA LINIA POD PASKIEM ===
+    _display.drawLine(0, 14, 256, 14);
+    
+    // === LISTA UTWORÓW ===
     drawFileList();
     drawScrollBar(_fileList.size(), 4);
 }
@@ -299,16 +359,44 @@ void SDPlayerOLED::drawFileList() {
             _display.setDrawColor(0);
         }
         
-        // Ikona: folder lub plik
-        const char* icon = _fileList[idx].isDir ? ">" : "♪";
-        _display.drawStr(2, y, icon);
-        
-        // Nazwa pliku (obcięta do szerokości)
-        String name = _fileList[idx].name;
-        if (name.length() > 38) {
-            name = name.substring(0, 37) + "~";
+        // Ikona: trójkąt dla folderów, nota dla plików
+        if (_fileList[idx].isDir) {
+            // Trójkąt wskazujący w prawo ►
+            _display.drawTriangle(3, y-6, 3, y-2, 7, y-4);
+        } else {
+            // Nota muzyczna (prostszy symbol)
+            _display.drawStr(2, y, "\xB7");  // Kropka jako nota
         }
-        _display.drawStr(12, y, name.c_str());
+        
+        // Nazwa pliku ze scrollowaniem dla zaznaczonego
+        String name = _fileList[idx].name;
+        
+        if (idx == _selectedIndex) {
+            // SCROLLOWANIE dla zaznaczonego elementu
+            int maxWidth = 230;  // Max szerokość tekstu
+            int nameWidth = _display.getStrWidth(name.c_str());
+            
+            if (nameWidth > maxWidth) {
+                // Scrolluj tekst
+                if (millis() - _lastScrollTime > 200) {
+                    _scrollTextOffset++;
+                    if (_scrollTextOffset > nameWidth + 20) _scrollTextOffset = -maxWidth;
+                    _lastScrollTime = millis();
+                }
+                
+                _display.setClipWindow(12, y - 10, 245, y + 2);
+                _display.drawStr(12 - _scrollTextOffset, y, name.c_str());
+                _display.setMaxClipWindow();
+            } else {
+                _display.drawStr(12, y, name.c_str());
+            }
+        } else {
+            // Obcięcie dla nie-zaznaczonych
+            if (name.length() > 38) {
+                name = name.substring(0, 37) + "...";
+            }
+            _display.drawStr(12, y, name.c_str());
+        }
         
         if (idx == _selectedIndex) {
             _display.setDrawColor(1);
@@ -352,95 +440,556 @@ void SDPlayerOLED::drawVolumeIcon(int x, int y) {
 }
 
 void SDPlayerOLED::renderStyle2() {
-    // Duży tekst utworu
+    // STYL 2: ODTWARZANIE - DUŻY TYTUŁ
+    // Tytuł utworu na górze (scrollowany jeśli za długi)
+    // Format audio + ikonka głośniczka + volume po prawej
+    
     if (!_player) return;
     
-    _display.setFont(u8g2_font_10x20_tf);
-    String current = _player->getCurrentFile();
-    if (current == "None") current = "Stopped";
-    
-    // Podziel na linie
-    int y = 20;
-    int maxChars = 12;
-    for (int i = 0; i < current.length(); i += maxChars) {
-        String line = current.substring(i, i + maxChars);
-        int w = _display.getStrWidth(line.c_str());
-        _display.drawStr((128 - w) / 2, y, line.c_str());
-        y += 18;
-        if (y > 60) break;
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None" || currentFile.length() == 0) {
+        currentFile = "Zatrzymany";
+    } else {
+        // Usuń rozszerzenie
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) {
+            currentFile = currentFile.substring(0, dotPos);
+        }
+        // Usuń ścieżkę
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) {
+            currentFile = currentFile.substring(slashPos + 1);
+        }
     }
     
-    // Volume na dole
-    _display.setFont(u8g2_font_6x10_tf);
-    String vol = "Vol: " + String(_player->getVolume());
-    _display.drawStr(4, 60, vol.c_str());
+    _display.setFont(u8g2_font_6x10_tr);
+    
+    // === GÓRNY PASEK ===
+    // 1. TYTUŁ UTWORU - SCROLLOWANY jeśli za długi
+    int titleMaxWidth = 180; // Zostaw miejsce na format i volume
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
+    
+    if (titleWidth > titleMaxWidth) {
+        // Płynne scrollowanie w prawo
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
+        
+        if (millis() - lastScrollTime > 100) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
+        }
+        
+        _display.setClipWindow(2, 0, titleMaxWidth + 2, 14);
+        _display.drawStr(2 - scrollOffset, 11, currentFile.c_str());
+        // Powtórz tekst dla ciągłego scrollowania
+        _display.drawStr(2 - scrollOffset + titleWidth + 30, 11, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        // Wyśrodkowany jeśli się mieści
+        int centerX = (titleMaxWidth - titleWidth) / 2;
+        _display.drawStr(2 + centerX, 11, currentFile.c_str());
+    }
+    
+    // 2. FORMAT AUDIO
+    String audioFormat = "";
+    String fullFileName = _player->getCurrentFile();
+    if (fullFileName.length() > 0 && fullFileName != "None") {
+        int dotPos = fullFileName.lastIndexOf('.');
+        if (dotPos > 0) {
+            audioFormat = fullFileName.substring(dotPos + 1);
+            audioFormat.toUpperCase();
+        }
+    }
+    
+    // 3. IKONKA GŁOŚNICZKA + VOLUME
+    int vol = _player->getVolume();
+    String volStr = String(vol);
+    int volWidth = _display.getStrWidth(volStr.c_str());
+    
+    int speakerX = 256 - volWidth - 20;
+    drawVolumeIcon(speakerX, 3);
+    _display.drawStr(speakerX + 14, 11, volStr.c_str());
+    
+    // Format przed głośnikiem
+    if (audioFormat.length() > 0) {
+        int formatWidth = _display.getStrWidth(audioFormat.c_str());
+        int formatX = speakerX - formatWidth - 8;
+        _display.drawStr(formatX, 11, audioFormat.c_str());
+    }
+    
+    // === CIENKA LINIA ===
+    _display.drawLine(0, 14, 256, 14);
+    
+    // === KOMPAKTOWA LISTA PLIKÓW (3 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 28;
+    const int visibleLines = 3;
+    
+    // Dostosuj scroll
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(0, y - 8, 256, 9);
+            _display.setDrawColor(0);
+        }
+        
+        // Ikona
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
+        } else {
+            _display.drawStr(2, y, "\xB7");
+        }
+        
+        // Nazwa
+        String name = _fileList[idx].name;
+        if (name.length() > 48) name = name.substring(0, 47) + "...";
+        _display.drawStr(8, y, name.c_str());
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
+    }
 }
 
 void SDPlayerOLED::renderStyle3() {
-    // VU meter + utwór
-    drawTopBar();
+    // STYL 3: SPEKTRUM AUDIO - ANIMOWANE SŁUPKI
+    // Górny pasek jak w stylu 2
+    // Poniżej: spektrum częstotliwości z animacją
     
-    // Symulacja VU meter (placeholder)
-    int vol = _player->getVolume();
-    int bars = (vol * 8) / 21;
+    if (!_player) return;
     
-    for (int i = 0; i < 8; i++) {
-        int h = 4 + i * 4;
-        int x = 10 + i * 14;
-        if (i < bars) {
-            _display.drawBox(x, 64 - h, 10, h);
-        } else {
-            _display.drawFrame(x, 64 - h, 10, h);
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None") currentFile = "---";
+    else {
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    }
+    
+    _display.setFont(u8g2_font_6x10_tr);
+    
+    // === GÓRNY PASEK ===
+    // Tytuł ze scrollowaniem
+    int titleMaxWidth = 180;
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
+    
+    if (titleWidth > titleMaxWidth) {
+        // Scrollowanie jak w stylu 2
+        static int scrollOffset3 = 0;
+        static unsigned long lastScrollTime3 = 0;
+        
+        if (millis() - lastScrollTime3 > 120) {
+            scrollOffset3++;
+            if (scrollOffset3 > titleWidth + 25) scrollOffset3 = 0;
+            lastScrollTime3 = millis();
         }
+        
+        _display.setClipWindow(2, 0, titleMaxWidth + 2, 14);
+        _display.drawStr(2 - scrollOffset3, 11, currentFile.c_str());
+        _display.drawStr(2 - scrollOffset3 + titleWidth + 25, 11, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        int centerX = (titleMaxWidth - titleWidth) / 2;
+        _display.drawStr(2 + centerX, 11, currentFile.c_str());
+    }
+    
+    // Format audio
+    String fullFileName = _player->getCurrentFile();
+    String audioFormat = "";
+    if (fullFileName != "None") {
+        int dotPos = fullFileName.lastIndexOf('.');
+        if (dotPos > 0) {
+            audioFormat = fullFileName.substring(dotPos + 1);
+            audioFormat.toUpperCase();
+        }
+    }
+    
+    // Volume + głośnik
+    int vol = _player->getVolume();
+    String volStr = String(vol);
+    int volWidth = _display.getStrWidth(volStr.c_str());
+    int speakerX = 256 - volWidth - 20;
+    
+    drawVolumeIcon(speakerX, 3);
+    _display.drawStr(speakerX + 14, 11, volStr.c_str());
+    
+    if (audioFormat.length() > 0) {
+        int formatWidth = _display.getStrWidth(audioFormat.c_str());
+        int formatX = speakerX - formatWidth - 8;
+        _display.drawStr(formatX, 11, audioFormat.c_str());
+    }
+    
+    _display.drawLine(0, 14, 256, 14);
+    
+    // === SPEKTRUM AUDIO - 32 SŁUPKI (małe) ===
+    const int numBars = 32;
+    const int barWidth = 6;
+    const int barGap = 2;
+    const int barStartY = 18;
+    const int maxBarHeight = 20;
+    
+    for (int i = 0; i < numBars; i++) {
+        int seed = (_animFrame + i * 7) % 100;
+        int height = (seed * maxBarHeight) / 100;
+        if (i < 8) height = (height * 130) / 100;
+        if (height > maxBarHeight) height = maxBarHeight;
+        
+        int x = 2 + i * (barWidth + barGap);
+        int y = barStartY + maxBarHeight - height;
+        
+        if (i % 2 == 0) {
+            _display.drawBox(x, y, barWidth, height);
+        } else {
+            _display.drawFrame(x, y, barWidth, height);
+        }
+    }
+    
+    // === LISTA PLIKÓW (2 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 48;
+    const int visibleLines = 2;
+    
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(0, y - 8, 256, 9);
+            _display.setDrawColor(0);
+        }
+        
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
+        } else {
+            _display.drawStr(2, y, "\xB7");
+        }
+        
+        String name = _fileList[idx].name;
+        if (name.length() > 48) name = name.substring(0, 47) + "...";
+        _display.drawStr(8, y, name.c_str());
+        
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
     }
 }
 
 void SDPlayerOLED::renderStyle4() {
-    // Spektrum częstotliwości (animacja placeholder)
-    drawTopBar();
+    // STYL 4: SPEKTRUM CZĘSTOTLIWOŚCI
+    // Tytuł scrollowany + animowane paski spektrum
     
-    for (int i = 0; i < 16; i++) {
-        int h = 4 + ((_animFrame + i * 3) % 20);
+    if (!_player) return;
+    
+    // === TYTUŁ SCROLLOWANY ===
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None" || currentFile.length() == 0) {
+        currentFile = "Zatrzymany";
+    } else {
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    }
+    
+    _display.setFont(u8g2_font_6x10_tr);
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
+    
+    if (titleWidth > 240) {
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
+        
+        if (millis() - lastScrollTime > 100) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
+        }
+        
+        _display.setClipWindow(8, 0, 248, 14);
+        _display.drawStr(8 - scrollOffset, 11, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 11, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        int centerX = (256 - titleWidth) / 2;
+        _display.drawStr(centerX, 11, currentFile.c_str());
+    }
+    
+    _display.drawLine(0, 14, 256, 14);
+    
+    // === SPEKTRUM - 32 PASKI (małe) ===
+    for (int i = 0; i < 32; i++) {
+        int h = 3 + ((_animFrame + i * 3) % 12);
         int x = 4 + i * 8;
-        _display.drawBox(x, 64 - h, 6, h);
+        _display.drawBox(x, 34 - h, 6, h);
+    }
+    
+    // === LISTA PLIKÓW (2 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 48;
+    const int visibleLines = 2;
+    
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(0, y - 8, 256, 9);
+            _display.setDrawColor(0);
+        }
+        
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
+        } else {
+            _display.drawStr(2, y, "\xB7");
+        }
+        
+        String name = _fileList[idx].name;
+        if (name.length() > 48) name = name.substring(0, 47) + "...";
+        _display.drawStr(8, y, name.c_str());
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
     }
 }
 
 void SDPlayerOLED::renderStyle5() {
-    // Minimalistyczny
+    // STYL 5: MINIMALISTYCZNY
+    // Tytuł scrollowany + prosty pasek volume
+    
     if (!_player) return;
     
+    // === TYTUŁ SCROLLOWANY ===
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None" || currentFile.length() == 0) {
+        currentFile = "---";
+    } else {
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    }
+    
     _display.setFont(u8g2_font_8x13_tf);
-    String current = _player->getCurrentFile();
-    if (current == "None") current = "---";
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
     
-    int w = _display.getStrWidth(current.c_str());
-    _display.drawStr((128 - w) / 2, 32, current.c_str());
+    if (titleWidth > 240) {
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
+        
+        if (millis() - lastScrollTime > 120) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
+        }
+        
+        _display.setClipWindow(8, 0, 248, 35);
+        _display.drawStr(8 - scrollOffset, 30, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 30, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        int centerX = (256 - titleWidth) / 2;
+        _display.drawStr(centerX, 30, currentFile.c_str());
+    }
     
-    // Volume bar
+    // === VOLUME BAR (mały) ===
     int vol = _player->getVolume();
-    int barW = (vol * 80) / 21;
-    _display.drawFrame(24, 45, 80, 6);
-    _display.drawBox(24, 45, barW, 6);
+    int barW = (vol * 200) / 21;
+    _display.drawFrame(28, 38, 200, 6);
+    _display.drawBox(28, 38, barW, 6);
+    
+    // === LISTA PLIKÓW (2 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 50;
+    const int visibleLines = 2;
+    
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(0, y - 8, 256, 9);
+            _display.setDrawColor(0);
+        }
+        
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
+        } else {
+            _display.drawStr(2, y, "\xB7");
+        }
+        
+        String name = _fileList[idx].name;
+        if (name.length() > 48) name = name.substring(0, 47) + "...";
+        _display.drawStr(8, y, name.c_str());
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
+    }
 }
 
 void SDPlayerOLED::renderStyle6() {
-    // Album art simulation
-    _display.drawFrame(30, 5, 68, 54);
-    _display.drawBox(32, 7, 64, 50);
+    // STYL 6: ALBUM ART
+    // Ramka z "albumem" + scrollowany tytuł na dole
     
-    // Nazwa na dole
     if (!_player) return;
-    _display.setFont(u8g2_font_5x8_tf);
-    String current = _player->getCurrentFile();
-    if (current.length() > 20) current = current.substring(0, 19) + "~";
-    int w = _display.getStrWidth(current.c_str());
-    _display.drawStr((128 - w) / 2, 63, current.c_str());
+    
+    // === SYMULACJA OKŁADKI ALBUMU (mniejsza) ===
+    _display.drawFrame(10, 18, 50, 32);
+    _display.drawBox(12, 20, 46, 28);
+    
+    // === LISTA PLIKÓW OBOK (3 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 24;
+    const int visibleLines = 3;
+    
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(68, y - 8, 188, 9);
+            _display.setDrawColor(0);
+        }
+        
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(70, y-5, 70, y-2, 73, y-3);
+        } else {
+            _display.drawStr(70, y, "\xB7");
+        }
+        
+        String name = _fileList[idx].name;
+        if (name.length() > 35) name = name.substring(0, 34) + "...";
+        _display.drawStr(76, y, name.c_str());
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
+    }
+    
+    // === TYTUŁ SCROLLOWANY NA DOLE ===
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None" || currentFile.length() == 0) {
+        currentFile = "---";
+    } else {
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    }
+    
+    _display.setFont(u8g2_font_6x10_tr);
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
+    
+    if (titleWidth > 240) {
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
+        
+        if (millis() - lastScrollTime > 100) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
+        }
+        
+        _display.setClipWindow(8, 50, 248, 64);
+        _display.drawStr(8 - scrollOffset, 60, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 60, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        int centerX = (256 - titleWidth) / 2;
+        _display.drawStr(centerX, 60, currentFile.c_str());
+    }
 }
 
 void SDPlayerOLED::renderStyle10() {
-    // Full screen animated
-    renderStyle1(); // Tymczasowo jak Style 1
+    // STYL 10: FULLSCREEN
+    // Tytuł scrollowany centralnie + duży status
+    
+    if (!_player) return;
+    
+    // === TYTUŁ SCROLLOWANY ===
+    String currentFile = _player->getCurrentFile();
+    if (currentFile == "None" || currentFile.length() == 0) {
+        currentFile = "Zatrzymany";
+    } else {
+        int dotPos = currentFile.lastIndexOf('.');
+        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
+        int slashPos = currentFile.lastIndexOf('/');
+        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    }
+    
+    _display.setFont(u8g2_font_8x13_tf);
+    int titleWidth = _display.getStrWidth(currentFile.c_str());
+    
+    if (titleWidth > 240) {
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
+        
+        if (millis() - lastScrollTime > 100) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
+        }
+        
+        _display.setClipWindow(8, 10, 248, 35);
+        _display.drawStr(8 - scrollOffset, 28, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 28, currentFile.c_str());
+        _display.setMaxClipWindow();
+    } else {
+        int centerX = (256 - titleWidth) / 2;
+        _display.drawStr(centerX, 28, currentFile.c_str());
+    }
+    
+    // === STATUS (wyżej) ===
+    _display.setFont(u8g2_font_6x10_tr);
+    String status = sdPlayerPlayingMusic ? "PLAYING" : "PAUSED";
+    int statusW = _display.getStrWidth(status.c_str());
+    _display.drawStr((256 - statusW) / 2, 38, status.c_str());
+    
+    // === LISTA PLIKÓW (2 linie) ===
+    _display.setFont(u8g2_font_5x8_tr);
+    const int lineHeight = 10;
+    const int startY = 48;
+    const int visibleLines = 2;
+    
+    if (_selectedIndex < _scrollOffset) _scrollOffset = _selectedIndex;
+    if (_selectedIndex >= _scrollOffset + visibleLines) _scrollOffset = _selectedIndex - visibleLines + 1;
+    
+    for (int i = 0; i < visibleLines && (i + _scrollOffset) < _fileList.size(); i++) {
+        int idx = i + _scrollOffset;
+        int y = startY + i * lineHeight;
+        
+        if (idx == _selectedIndex) {
+            _display.drawBox(0, y - 8, 256, 9);
+            _display.setDrawColor(0);
+        }
+        
+        if (_fileList[idx].isDir) {
+            _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
+        } else {
+            _display.drawStr(2, y, "\xB7");
+        }
+        
+        String name = _fileList[idx].name;
+        if (name.length() > 48) name = name.substring(0, 47) + "...";
+        _display.drawStr(8, y, name.c_str());
+        
+        if (idx == _selectedIndex) _display.setDrawColor(1);
+    }
 }
 
 // ===== KONTROLA PILOTA =====
@@ -466,7 +1015,26 @@ void SDPlayerOLED::onRemoteOK() {
 }
 
 void SDPlayerOLED::onRemoteSRC() {
-    nextInfoStyle();
+    // Podwójne kliknięcie SRC = zmiana stylu wyświetlania
+    unsigned long currentTime = millis();
+    
+    if (currentTime - _lastSrcPressTime > 1000) {
+        // Timeout - reset licznika
+        _srcClickCount = 0;
+    }
+    
+    _srcClickCount++;
+    _lastSrcPressTime = currentTime;
+    
+    if (_srcClickCount >= 2) {
+        // Podwójne kliknięcie - zmień styl
+        nextStyle();
+        _srcClickCount = 0;
+        Serial.printf("SDPlayer: Zmiana stylu OLED na %d\n", (int)_style);
+    } else {
+        // Pojedyncze - zmień InfoStyle (zegar/tytuł)
+        nextInfoStyle();
+    }
 }
 
 void SDPlayerOLED::nextInfoStyle() {

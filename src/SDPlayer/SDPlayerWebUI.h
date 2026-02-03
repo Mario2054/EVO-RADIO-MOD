@@ -77,15 +77,12 @@ static const char SDPLAYER_HTML[] PROGMEM = R"HTML(
   <div class="btnrow">
     <button onclick="back()">Back to Menu</button>
   </div>
-  
-  <div id="debug" style="background:yellow;padding:10px;margin:10px;font-family:monospace;white-space:pre;"></div>
 </div>
 
 <script>
-var dbg = document.getElementById('debug');
-dbg.innerText = 'JavaScript START\n';
 console.log('=== SD Player JavaScript START ===');
 let data=null;
+let refreshTimer=null;
 
 function post(url){
   console.log('POST:',url);
@@ -98,25 +95,20 @@ function post(url){
 }
 
 function refresh(){
-  dbg.innerText += 'Refresh called\n';
   console.log('Refresh called');
   fetch('/sdplayer/api/list')
     .then(r=>{
-      dbg.innerText += 'Got response: '+r.status+'\n';
       console.log('List response status:',r.status);
       if(!r.ok) throw new Error('HTTP error! status: '+r.status);
       return r.json();
     })
     .then(j=>{
-      dbg.innerText += 'JSON parsed OK\n';
       console.log('List data received:',j);
       data=j;
       render();
     })
     .catch(e=>{
-      dbg.innerText += 'ERROR: '+e.message+'\n';
       console.error('Refresh error:',e);
-      console.error('Error stack:',e.stack);
     });
 }
 
@@ -127,6 +119,7 @@ function setVol(v){
 
 function back(){ 
   console.log('Back to menu clicked');
+  if(refreshTimer) clearInterval(refreshTimer);  // Zatrzymaj odświeżanie
   fetch('/sdplayer/api/back', {method:'POST'})
     .then(() => {
       console.log('Redirecting to /');
@@ -184,10 +177,9 @@ function render(){
   }
 }
 
-dbg.innerText += 'Script loaded, calling refresh\n';
-console.log('SDPlayer script loaded, starting auto-refresh');
-refresh();
-setInterval(refresh, 2000);  // Odświeżaj co 2 sekundy dla synchronizacji volume
+console.log('SDPlayer script loaded, starting initial refresh');
+refresh();  // Pierwsze załadowanie
+refreshTimer = setInterval(refresh, 5000);  // Odświeżaj co 5 sekund (tylko status/volume)
 </script>
 </body>
 </html>

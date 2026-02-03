@@ -62,6 +62,7 @@ public:
     
     void setStyle(DisplayStyle style);
     DisplayStyle getStyle() { return _style; }
+    void nextStyle();  // Przełączanie do następnego stylu
     
     // Style informacji na górnym pasku
     enum InfoStyle {
@@ -99,10 +100,14 @@ private:
     unsigned long _splashStartTime;
     unsigned long _volumeShowTime;
     unsigned long _lastUpdate;
+    unsigned long _lastSrcPressTime;  // Dla podwójnego kliknięcia SRC
+    uint8_t _srcClickCount;           // Licznik kliknięć SRC
     
     // Animacje
     int _scrollPosition;
     int _animFrame;
+    int _scrollTextOffset;        // Offset scrollowania tekstu w liście
+    unsigned long _lastScrollTime; // Timer scrollowania tekstu
     
     // Odświeżanie listy plików
     void refreshFileList();
@@ -130,5 +135,4 @@ private:
     void scrollUp();
     void scrollDown();
     void selectCurrent();
-    void nextStyle();
 };

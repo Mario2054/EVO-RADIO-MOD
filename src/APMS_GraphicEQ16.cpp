@@ -58,8 +58,69 @@ void setAll(const int8_t* in16){
 
 void applyToAudio(){
   if(!s_audio) return;
-  s_audio->setGraphicEQ16(s_gains);
-  s_audio->enableGraphicEQ16(s_enabled);
+  
+  // ========================================================================
+  // INTELIGENTNA KONWERSJA 16-PASM -> 3-PUNKTY (LOW/MID/HIGH)
+  // ========================================================================
+  // Nowa biblioteka ESP32-audioI2S używa wbudowanych filtrów IIR (setTone)
+  // Konwersja uwzględnia wagę poszczególnych pasm dla lepszego efektu
+  // ========================================================================
+  
+  if(!s_enabled) {
+    // EQ wyłączony - ustaw wszystko na neutralne (0dB)
+    s_audio->setTone(0, 0, 0);
+    return;
+  }
+  
+  // POPRAWIONA KONWERSJA Z WAGAMI:
+  // Pasma dolne (0-4):  32Hz, 64Hz, 125Hz, 250Hz, 500Hz  -> LOW
+  // Pasma środkowe (5-10): 1kHz, 2kHz, 3kHz, 4kHz, 5kHz, 6kHz -> MID
+  // Pasma górne (11-15): 8kHz, 10kHz, 12kHz, 14kHz, 15kHz, 16kHz -> HIGH
+  
+  // Wagi pasm - pasma środkowe mają większą wagę (bardziej słyszalne)
+  const float lowWeights[5]   = {1.2f, 1.5f, 1.3f, 1.0f, 0.8f}; // Podkreśl subbass
+  const float midWeights[6]   = {1.0f, 1.3f, 1.5f, 1.3f, 1.0f, 0.8f}; // Wokale 2-3kHz
+  const float highWeights[5]  = {1.0f, 1.2f, 1.1f, 0.9f, 0.8f}; // Łagodź szczyt
+  
+  float lowSum = 0.0f, midSum = 0.0f, highSum = 0.0f;
+  float lowWeight = 0.0f, midWeight = 0.0f, highWeight = 0.0f;
+  
+  // Ważona suma pasm LOW (0-4)
+  for(int i=0; i<5; i++) {
+    lowSum += s_gains[i] * lowWeights[i];
+    lowWeight += lowWeights[i];
+  }
+  
+  // Ważona suma pasm MID (5-10)
+  for(int i=5; i<11; i++) {
+    midSum += s_gains[i] * midWeights[i-5];
+    midWeight += midWeights[i-5];
+  }
+  
+  // Ważona suma pasm HIGH (11-15)
+  for(int i=11; i<16; i++) {
+    highSum += s_gains[i] * highWeights[i-11];
+    highWeight += highWeights[i-11];
+  }
+  
+  // Oblicz ważone średnie
+  int8_t lowGain = (int8_t)(lowSum / lowWeight);
+  int8_t midGain = (int8_t)(midSum / midWeight);
+  int8_t highGain = (int8_t)(highSum / highWeight);
+  
+  // Ograniczenie do zakresu [-40..+6] dB zgodnie z dokumentacją setTone()
+  // Dodatkowo ograniczamy do [-12..+6] dla bezpieczeństwa
+  if(lowGain > 6) lowGain = 6;
+  if(lowGain < -12) lowGain = -12;
+  if(midGain > 6) midGain = 6;
+  if(midGain < -12) midGain = -12;
+  if(highGain > 6) highGain = 6;
+  if(highGain < -12) highGain = -12;
+  
+  s_audio->setTone(lowGain, midGain, highGain);
+  
+  Serial.printf("EQ16->setTone: Low=%ddB, Mid=%ddB, High=%ddB (weighted avg)\n", 
+                lowGain, midGain, highGain);
 }
 
 // --- UI drawings (low cost) ---
@@ -239,6 +300,10 @@ void EQ16_setMenuActive(bool active) {
 }
 
 void EQ16_displayMenu(void) {
+    // GUARD: Nie rysuj gdy SDPlayer aktywny
+    extern bool sdPlayerOLEDActive;
+    if (sdPlayerOLEDActive) return;
+    
     extern U8G2_SSD1322_NHD_256X64_F_4W_HW_SPI u8g2;
     
     // Uproszczone menu EQ16 na wzór menu 3-punktowego - szybkie i niezawodne
@@ -340,72 +405,15 @@ void EQ16_decreaseBandGain(void) {
 }
 
 float EQ16_processSample(float sample, float unused, bool isLeft) {
-    if (!APMS_EQ16::isEnabled()) {
-        return sample; // EQ wyłączony - przepuść próbkę bez zmian
-    }
+    // UWAGA: Ta funkcja nie jest używana w nowej bibliotece ESP32-audioI2S
+    // Przetwarzanie audio odbywa się przez wbudowane filtry IIR w Audio.cpp
+    // za pomocą metody setTone(low, mid, high)
     
-    (void)unused; // Suppress unused warnings
-    (void)isLeft; // Ten EQ jest mono - nie różnicujemy kanałów
+    // Zachowana dla kompatybilności API, ale zwraca próbkę bez zmian
+    (void)unused;
+    (void)isLeft;
     
-    // Bez debugowania w pętli audio dla maksymalnej wydajności
-    
-    // Podstawowe wzmocnienie 0dB (x1.0) - normalne wzmocnienie
-    float output = sample * 1.0f;
-    
-    // Rozszerzona tablica: dB -> współczynnik liniowy dla zakresu [-16..+16]
-    static const float dbToLinear[33] = {
-        // -16dB do -9dB
-        0.158f, 0.178f, 0.200f, 0.224f, 0.251f, 0.282f, 0.316f, 0.355f,
-        // -8dB do -1dB  
-        0.398f, 0.447f, 0.501f, 0.562f, 0.631f, 0.708f, 0.794f, 0.891f,
-        // 0dB
-        1.000f,
-        // +1dB do +8dB
-        1.122f, 1.259f, 1.413f, 1.585f, 1.778f, 1.995f, 2.239f, 2.512f,
-        // +9dB do +16dB
-        2.818f, 3.162f, 3.548f, 3.981f, 4.467f, 5.012f, 5.623f, 6.310f
-    };
-    
-    int8_t gains[16];
-    APMS_EQ16::getAll(gains);
-    
-    // SZYBKI KOREKTOR: Uproszczony algorytm dla wydajności
-    float totalGain = 0.0f;
-    for (int i = 0; i < 16; i++) {
-        // Szybka konwersja dB -> linear przez lookup table
-        int dbIndex = gains[i] + 16; // shift -16..+16 to 0..32
-        if (dbIndex < 0) dbIndex = 0;
-        if (dbIndex > 32) dbIndex = 32;
-        totalGain += dbToLinear[dbIndex];
-    }
-    
-    // Użyj średniej z wszystkich pasm jako wzmocnienie
-    output *= (totalGain / 16.0f);
-    
-    // Minimalne sprawdzenie zmian - tylko co 1000 próbek  
-    static uint16_t changeCheckCount = 0;
-    static int8_t lastGains[16] = {0};
-    if (++changeCheckCount >= 1000) {
-        for (int i = 0; i < 16; i++) {
-            if (gains[i] != lastGains[i]) {
-                Serial.printf("EQ16: Gains changed\n");
-                memcpy(lastGains, gains, 16);
-                break;
-            }
-        }
-        changeCheckCount = 0;
-    }
-    
-    // Inteligentny limiter - zachowuje dynamikę przy wysokich poziomach
-    if (output > 0.8f) {
-        float excess = output - 0.8f;
-        output = 0.8f + excess * (0.2f / (1.0f + excess * 3.0f)); // soft knee
-    } else if (output < -0.8f) {
-        float excess = -output - 0.8f;
-        output = -0.8f - excess * (0.2f / (1.0f + excess * 3.0f)); // soft knee
-    }
-    
-    return output;
+    return sample;
 }
 
 void EQ16_saveToSD(void) {
@@ -476,32 +484,77 @@ void EQ16_autoSave(void) {
 }
 
 void EQ16_loadPreset(uint8_t presetId) {
-    // Professional audio presets for 16-band EQ (32Hz-16kHz)
-    // Values in dB: -12 to +12 range
-    int8_t presets[5][16] = {
-        // Preset 0: Flat (Reference)
+    // ========================================================================
+    // PROFESJONALNE PRESETY AUDIO - ZOPTYMALIZOWANE POD KONWERSJĘ 16->3
+    // ========================================================================
+    // Presety zaprojektowane z uwzględnieniem wag i ograniczeń setTone()
+    // Zakres: -12 do +12 dB (bezpieczny margines przed ograniczeniem)
+    // ========================================================================
+    
+    int8_t presets[9][16] = {
+        // Preset 0: Flat (Reference) - Idealnie płaskie
         {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
         
-        // Preset 1: Bass Boost (Enhanced low-end for electronic/hip-hop)
-        {8,6,4,2,1,0,-1,-1,-1,0,0,0,0,0,0,0},
+        // Preset 1: Bass Boost - Podkreślone basy (elektronika/hip-hop)
+        // Sub-bass +8dB, Bass +6dB, łagodny roll-off
+        {8,7,6,4,2,0,-1,-1,-1,0,0,0,0,0,0,0},
         
-        // Preset 2: Vocal (Clear speech and vocals)
-        {-2,-1,0,1,2,4,6,5,3,1,0,-1,-1,-1,-2,-2},
+        // Preset 2: Vocal Clarity - Wyraźne wokale i czysta mowa
+        // Wycięcie niskich, wzmocnienie 1-4kHz (obecność wokalu)
+        {-3,-2,-1,0,1,3,6,6,4,2,0,-1,-1,-2,-2,-3},
         
-        // Preset 3: Presence (Radio/broadcast clarity)
-        {0,0,1,2,3,4,5,4,3,2,1,0,0,0,0,0},
+        // Preset 3: Radio Presence - Przejrzystość broadcast
+        // Podkreślenie środka, łagodne basy i wysokie
+        {0,1,2,3,4,5,6,5,4,3,2,1,0,0,0,0},
         
-        // Preset 4: V-Shape (Modern smile curve)
-        {4,3,2,1,0,-1,-2,-2,-2,-1,0,1,2,3,4,5}
+        // Preset 4: V-Shape (Smile) - Nowoczesne brzmienie
+        // Basy i wysokie podkreślone, środek wyciszony
+        {6,5,4,2,0,-2,-3,-3,-3,-2,0,2,4,5,6,7},
+        
+        // Preset 5: Rock/Metal - Agresywne brzmienie
+        // Mocne basy, wzmocnione wysokie, lekko wycięte środki
+        {7,6,4,2,1,-1,-2,-2,-1,0,2,4,6,7,8,8},
+        
+        // Preset 6: Jazz/Classical - Naturalne brzmienie
+        // Delikatne podniesienie niskich i wysokich
+        {2,2,1,1,0,0,0,0,0,0,0,1,2,3,3,2},
+        
+        // Preset 7: Electronic/EDM - Dynamiczne basy + krystaliczne wysokie
+        // Potężne sub-bass, agresywne wysokie, delikatnie wycięty środek
+        {10,9,7,5,3,1,-1,-2,-2,-1,1,3,5,7,9,10},
+        
+        // Preset 8: Custom (Moje) - Załaduj ostatnio zapisane ustawienia
+        // Ten preset ładuje to co użytkownik zapisał ręcznie
+        {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}  // Placeholder - będzie załadowane z SD
     };
     
-    if(presetId < 5) {
-        for(uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
-            APMS_EQ16::setBand(i, presets[presetId][i]);
+    if(presetId < 9) {
+        Serial.printf("EQ16: Loading preset %d...\n", presetId);
+        
+        if (presetId == 8) {
+            // Custom - załaduj z SD (plik eq16.txt)
+            Serial.println("EQ16: Loading CUSTOM preset from SD card...");
+            EQ16_loadFromSD();  // Załaduje zapisane ustawienia użytkownika
+        } else {
+            // Normalny preset
+            for(uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
+                APMS_EQ16::setBand(i, presets[presetId][i]);
+            }
+            
+            // ZASTOSUJ ZMIANY DO AUDIO - wywołaj funkcję z namespace
+            using namespace APMS_EQ16;
+            applyToAudio();
+            
+            EQ16_saveToSD();  // Automatyczny zapis po załadowaniu presetu
         }
-        APMS_EQ16::applyToAudio();  // ZASTOSUJ ZMIANY DO AUDIO!
-        EQ16_saveToSD();  // Automatyczny zapis po załadowaniu presetu
-        Serial.printf("EQ16: Loaded preset %d, applied to audio and saved to SD\n", presetId);
+        
+        const char* presetNames[] = {
+            "Flat", "Bass Boost", "Vocal", "Radio", "V-Shape", "Rock/Metal", "Jazz", "Electronic", "Custom"
+        };
+        
+        Serial.printf("EQ16: Preset '%s' loaded, applied and saved\n", presetNames[presetId]);
+    } else {
+        Serial.printf("EQ16: Invalid preset ID %d (max 8)\n", presetId);
     }
 }
 

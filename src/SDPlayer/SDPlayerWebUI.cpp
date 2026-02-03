@@ -19,23 +19,23 @@ void SDPlayerWebUI::begin(AsyncWebServer* server, Audio* audioPtr) {
     _server = server;
     _audio = audioPtr;
     
-    Serial.println("SDPlayerWebUI: Registering routes...");
+    // Serial.println("SDPlayerWebUI: Registering routes...");
     
     // WAŻNE: API endpoints NAJPIERW - muszą być przed /sdplayer
     // ESPAsyncWebServer dopasowuje pierwszy pasujący route
     
     _server->on("/sdplayer/api/list", HTTP_GET, [this](AsyncWebServerRequest *request){
-        Serial.println("SDPlayerWebUI: /sdplayer/api/list requested");
+        // Serial.println("SDPlayerWebUI: /sdplayer/api/list requested");
         this->handleList(request);
     });
     
     _server->on("/sdplayer/api/play", HTTP_POST, [this](AsyncWebServerRequest *request){
-        Serial.println("SDPlayerWebUI: /sdplayer/api/play requested");
+        // Serial.println("SDPlayerWebUI: /sdplayer/api/play requested");
         this->handlePlay(request);
     });
     
     _server->on("/sdplayer/api/playSelected", HTTP_POST, [this](AsyncWebServerRequest *request){
-        Serial.println("SDPlayerWebUI: /sdplayer/api/playSelected requested");
+        // Serial.println("SDPlayerWebUI: /sdplayer/api/playSelected requested");
         this->handlePlaySelected(request);
     });
     
@@ -73,15 +73,15 @@ void SDPlayerWebUI::begin(AsyncWebServer* server, Audio* audioPtr) {
     
     // Główna strona SD Player - NA KOŃCU!
     _server->on("/sdplayer", HTTP_GET, [this](AsyncWebServerRequest *request){
-        Serial.println("SDPlayerWebUI: /sdplayer requested");
+        // Serial.println("SDPlayerWebUI: /sdplayer requested");
         this->handleRoot(request);
     });
     
     // Inicjalizacja
     if (!SD.begin()) {
-        Serial.println("SD Card initialization failed!");
+        // Serial.println("SD Card initialization failed!");
     } else {
-        Serial.println("SD Card initialized.");
+        // Serial.println("SD Card initialized.");
         scanCurrentDirectory();
     }
 }
@@ -93,31 +93,31 @@ void SDPlayerWebUI::setExitCallback(std::function<void()> callback) {
 void SDPlayerWebUI::setOLED(SDPlayerOLED* oled) {
     _oled = oled;
     if (_oled) {
-        Serial.println("SDPlayerWebUI: OLED display connected");
+        // Serial.println("SDPlayerWebUI: OLED display connected");
     }
 }
 
 void SDPlayerWebUI::handleRoot(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleRoot called");
-    Serial.printf("SDPlayerWebUI: Request URL: %s\n", request->url().c_str());
-    Serial.printf("SDPlayerWebUI: Sending HTML, size=%d bytes\n", strlen_P(SDPLAYER_HTML));
+    // Serial.println("SDPlayerWebUI: handleRoot called");
+    // Serial.printf("SDPlayerWebUI: Request URL: %s\n", request->url().c_str());
+    // Serial.printf("SDPlayerWebUI: Sending HTML, size=%d bytes\n", strlen_P(SDPLAYER_HTML));
     
     // Aktywuj OLED przy wejściu na stronę SD Player
     if (_oled && !_oled->isActive()) {
         _oled->activate();
         _oled->showSplash();
-        Serial.println("SDPlayerWebUI: OLED activated with splash");
+        // Serial.println("SDPlayerWebUI: OLED activated with splash");
     }
     
     request->send_P(200, "text/html", SDPLAYER_HTML);
-    Serial.println("SDPlayerWebUI: HTML sent");
+    // Serial.println("SDPlayerWebUI: HTML sent");
 }
 
 void SDPlayerWebUI::handleList(AsyncWebServerRequest *request) {
-    Serial.println("========================================");
-    Serial.println("SDPlayerWebUI: handleList called");
-    Serial.printf("SDPlayerWebUI: Request URL: %s\n", request->url().c_str());
-    Serial.println("========================================");
+    // Serial.println("========================================");
+    // Serial.println("SDPlayerWebUI: handleList called");
+    // Serial.printf("SDPlayerWebUI: Request URL: %s\n", request->url().c_str());
+    // Serial.println("========================================");
     scanCurrentDirectory();
     
     DynamicJsonDocument doc(4096);
@@ -135,50 +135,50 @@ void SDPlayerWebUI::handleList(AsyncWebServerRequest *request) {
     
     String response;
     serializeJson(doc, response);
-    Serial.println("SDPlayerWebUI: Sending JSON: " + response);
+    // Serial.println("SDPlayerWebUI: Sending JSON: " + response);
     request->send(200, "application/json", response);
 }
 
 void SDPlayerWebUI::handlePlay(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handlePlay called");
+    // Serial.println("SDPlayerWebUI: handlePlay called");
     if (request->hasParam("i")) {
         int idx = request->getParam("i")->value().toInt();
-        Serial.printf("Playing index: %d\n", idx);
+        // Serial.printf("Playing index: %d\n", idx);
         playIndex(idx);
     }
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handlePlaySelected(AsyncWebServerRequest *request) {
-    Serial.printf("SDPlayerWebUI: handlePlaySelected called, index=%d, listSize=%d\n", _selectedIndex, _fileList.size());
+    // Serial.printf("SDPlayerWebUI: handlePlaySelected called, index=%d, listSize=%d\n", _selectedIndex, _fileList.size());
     if (_selectedIndex >= 0 && _selectedIndex < _fileList.size()) {
         playIndex(_selectedIndex);
     } else {
-        Serial.println("SDPlayerWebUI: No file selected or invalid index");
+        // Serial.println("SDPlayerWebUI: No file selected or invalid index");
     }
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handlePause(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handlePause called");
+    // Serial.println("SDPlayerWebUI: handlePause called");
     pause();
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handleStop(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleStop called");
+    // Serial.println("SDPlayerWebUI: handleStop called");
     stop();
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handleNext(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleNext called");
+    // Serial.println("SDPlayerWebUI: handleNext called");
     next();
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handlePrev(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handlePrev called");
+    // Serial.println("SDPlayerWebUI: handlePrev called");
     prev();
     request->send(200, "text/plain", "OK");
 }
@@ -192,23 +192,23 @@ void SDPlayerWebUI::handleVol(AsyncWebServerRequest *request) {
 }
 
 void SDPlayerWebUI::handleCd(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleCd called");
+    // Serial.println("SDPlayerWebUI: handleCd called");
     if (request->hasParam("p")) {
         String path = request->getParam("p")->value();
-        Serial.println("Changing directory to: " + path);
+        // Serial.println("Changing directory to: " + path);
         changeDirectory(path);
     }
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handleUp(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleUp called");
+    // Serial.println("SDPlayerWebUI: handleUp called");
     upDirectory();
     request->send(200, "text/plain", "OK");
 }
 
 void SDPlayerWebUI::handleBack(AsyncWebServerRequest *request) {
-    Serial.println("SDPlayerWebUI: handleBack called - stopping playback");
+    // Serial.println("SDPlayerWebUI: handleBack called - stopping playback");
     
     // Zatrzymaj odtwarzanie przed wyjściem
     stop();
@@ -216,7 +216,7 @@ void SDPlayerWebUI::handleBack(AsyncWebServerRequest *request) {
     // Deaktywuj OLED display
     if (_oled && _oled->isActive()) {
         _oled->deactivate();
-        Serial.println("SDPlayerWebUI: OLED deactivated");
+        // Serial.println("SDPlayerWebUI: OLED deactivated");
     }
     
     if (_exitCallback) {
@@ -229,18 +229,18 @@ void SDPlayerWebUI::playFile(const String& path) {
     _currentFile = path;
     _isPlaying = true;
     _isPaused = false;
-    Serial.println("SDPlayerWebUI: Playing file: " + path);
+    // Serial.println("SDPlayerWebUI: Playing file: " + path);
     
     if (_audio) {
         _audio->stopSong();  // Zatrzymaj obecną muzykę
         if (_audio->connecttoFS(SD, path.c_str())) {
-            Serial.println("SDPlayerWebUI: Audio started playing from SD");
+            // Serial.println("SDPlayerWebUI: Audio started playing from SD");
         } else {
-            Serial.println("SDPlayerWebUI: ERROR - Failed to play file!");
+            // Serial.println("SDPlayerWebUI: ERROR - Failed to play file!");
             _isPlaying = false;
         }
     } else {
-        Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
+        // Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
     }
     
     // Aktualizuj OLED
@@ -272,7 +272,7 @@ void SDPlayerWebUI::playIndex(int index) {
 void SDPlayerWebUI::pause() {
     if (_isPlaying && _audio) {
         _isPaused = !_isPaused;
-        Serial.println(_isPaused ? "SDPlayerWebUI: Paused" : "SDPlayerWebUI: Resumed");
+        // Serial.println(_isPaused ? "SDPlayerWebUI: Paused" : "SDPlayerWebUI: Resumed");
         _audio->pauseResume();
         
         // Aktualizuj OLED
@@ -280,7 +280,7 @@ void SDPlayerWebUI::pause() {
             _oled->loop();
         }
     } else if (!_audio) {
-        Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
+        // Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
     }
 }
 
@@ -288,12 +288,12 @@ void SDPlayerWebUI::stop() {
     _isPlaying = false;
     _isPaused = false;
     _currentFile = "None";
-    Serial.println("SDPlayerWebUI: Stopped");
+    // Serial.println("SDPlayerWebUI: Stopped");
     
     if (_audio) {
         _audio->stopSong();
     } else {
-        Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
+        // Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
     }
     
     // Aktualizuj OLED
@@ -330,21 +330,21 @@ void SDPlayerWebUI::setVolume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 21) vol = 21;
     _volume = vol;
-    Serial.println("SDPlayerWebUI: Setting volume to " + String(vol));
+    // Serial.println("SDPlayerWebUI: Setting volume to " + String(vol));
     
     // Ustaw globalną głośność Audio
     if (_audio) {
         _audio->setVolume(vol);
-        Serial.println("SDPlayerWebUI: Audio volume set");
+        // Serial.println("SDPlayerWebUI: Audio volume set");
     } else {
-        Serial.println("SDPlayerWebUI: WARNING - Audio pointer is NULL!");
+        // Serial.println("SDPlayerWebUI: WARNING - Audio pointer is NULL!");
     }
 }
 
 void SDPlayerWebUI::changeDirectory(const String& path) {
     File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
-        Serial.println("Failed to open directory: " + path);
+        // Serial.println("Failed to open directory: " + path);
         dir.close();
         return;
     }
@@ -354,7 +354,7 @@ void SDPlayerWebUI::changeDirectory(const String& path) {
     // Usuń podwójne slashe
     _currentDir.replace("//", "/");
     
-    Serial.println("Changed directory to: " + _currentDir);
+    // Serial.println("Changed directory to: " + _currentDir);
     scanCurrentDirectory();
 }
 
@@ -368,7 +368,7 @@ void SDPlayerWebUI::upDirectory() {
         _currentDir = _currentDir.substring(0, lastSlash);
     }
     
-    Serial.println("Up to directory: " + _currentDir);
+    // Serial.println("Up to directory: " + _currentDir);
     scanCurrentDirectory();
 }
 
@@ -377,7 +377,7 @@ void SDPlayerWebUI::scanCurrentDirectory() {
     
     File dir = SD.open(_currentDir);
     if (!dir || !dir.isDirectory()) {
-        Serial.println("Failed to scan directory: " + _currentDir);
+        // Serial.println("Failed to scan directory: " + _currentDir);
         if (dir) dir.close();
         return;
     }
@@ -405,7 +405,7 @@ void SDPlayerWebUI::scanCurrentDirectory() {
     dir.close();
     
     sortFileList();
-    Serial.println("Scanned " + String(_fileList.size()) + " items in " + _currentDir);
+    // Serial.println("Scanned " + String(_fileList.size()) + " items in " + _currentDir);
 }
 
 void SDPlayerWebUI::buildFileList(JsonArray& items) {

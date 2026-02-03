@@ -401,6 +401,202 @@ void analyzerStyleSave()
   f.close();
 }
 
+// Zmienne dla statusu wczytywania
+static String g_loadStatus = "NIEZAINICJALIZOWANY";
+static int g_loadedParamsCount = 0;
+
+// Funkcja zwracająca konfigurację jako String (do zapisu w main.cpp)
+String analyzerStyleToSaveString()
+{
+  String s;
+  s.reserve(2000);
+  s += "# Analyzer style cfg\n";
+  s += "# Global settings\n";
+  s += "peakHoldMs=" + String(g_cfg.peakHoldTimeMs) + "\n";
+  s += "# Style5\n";
+  s += "s5w=" + String(g_cfg.s5_barWidth) + "\n";
+  s += "s5g=" + String(g_cfg.s5_barGap) + "\n";
+  s += "s5seg=" + String(g_cfg.s5_segments) + "\n";
+  s += "s5fill=" + String(g_cfg.s5_fill, 3) + "\n";
+  s += "s5segH=" + String(g_cfg.s5_segHeight) + "\n";
+  s += "s5peaks=" + String(g_cfg.s5_showPeaks ? 1 : 0) + "\n";
+  s += "s5smooth=" + String(g_cfg.s5_smoothness) + "\n";
+  s += "s5barBrightness=" + String(g_cfg.s5_barBrightness) + "\n";
+  s += "s5peakBrightness=" + String(g_cfg.s5_peakBrightness) + "\n";
+  
+  s += "# Style6\n";
+  s += "s6w=" + String(g_cfg.s6_width) + "\n";
+  s += "s6g=" + String(g_cfg.s6_gap) + "\n";
+  s += "s6sh=" + String(g_cfg.s6_shrink) + "\n";
+  s += "s6fill=" + String(g_cfg.s6_fill, 3) + "\n";
+  s += "s6min=" + String(g_cfg.s6_segMin) + "\n";
+  s += "s6max=" + String(g_cfg.s6_segMax) + "\n";
+  s += "s6peaks=" + String(g_cfg.s6_showPeaks ? 1 : 0) + "\n";
+  s += "s6smooth=" + String(g_cfg.s6_smoothness) + "\n";
+  s += "s6barBrightness=" + String(g_cfg.s6_barBrightness) + "\n";
+  s += "s6peakBrightness=" + String(g_cfg.s6_peakBrightness) + "\n";
+  
+  s += "# Style7\n";
+  s += "s7radius=" + String(g_cfg.s7_circleRadius) + "\n";
+  s += "s7gap=" + String(g_cfg.s7_circleGap) + "\n";
+  s += "s7filled=" + String(g_cfg.s7_filled ? 1 : 0) + "\n";
+  s += "s7max=" + String(g_cfg.s7_maxHeight) + "\n";
+  
+  s += "# Style8\n";
+  s += "s8thick=" + String(g_cfg.s8_lineThickness) + "\n";
+  s += "s8gap=" + String(g_cfg.s8_lineGap) + "\n";
+  s += "s8grad=" + String(g_cfg.s8_gradient ? 1 : 0) + "\n";
+  s += "s8max=" + String(g_cfg.s8_maxHeight) + "\n";
+  
+  s += "# Style9\n";
+  s += "s9radius=" + String(g_cfg.s9_starRadius) + "\n";
+  s += "s9armw=" + String(g_cfg.s9_armWidth) + "\n";
+  s += "s9arml=" + String(g_cfg.s9_armLength) + "\n";
+  s += "s9spike=" + String(g_cfg.s9_spikeLength) + "\n";
+  s += "s9spikes=" + String(g_cfg.s9_showSpikes ? 1 : 0) + "\n";
+  s += "s9filled=" + String(g_cfg.s9_filled ? 1 : 0) + "\n";
+  s += "s9center=" + String(g_cfg.s9_centerSize) + "\n";
+  s += "s9smooth=" + String(g_cfg.s9_smoothness) + "\n";
+  
+  s += "# Style10 - Floating Peaks\n";
+  s += "s10barw=" + String(g_cfg.s10_barWidth) + "\n";
+  s += "s10gap=" + String(g_cfg.s10_barGap) + "\n";
+  s += "s10segh=" + String(g_cfg.s10_segmentHeight) + "\n";
+  s += "s10segg=" + String(g_cfg.s10_segmentGap) + "\n";
+  s += "s10maxp=" + String(g_cfg.s10_maxPeaks) + "\n";
+  s += "s10hold=" + String(g_cfg.s10_peakHoldTime) + "\n";
+  s += "s10speed=" + String(g_cfg.s10_peakFloatSpeed) + "\n";
+  s += "s10fade=" + String(g_cfg.s10_peakFadeSteps) + "\n";
+  s += "s10trail=" + String(g_cfg.s10_trailLength) + "\n";
+  s += "s10trails=" + String(g_cfg.s10_showTrails ? 1 : 0) + "\n";
+  s += "s10smooth=" + String(g_cfg.s10_smoothness) + "\n";
+  s += "s10barbr=" + String(g_cfg.s10_barBrightness) + "\n";
+  s += "s10peakbr=" + String(g_cfg.s10_peakBrightness) + "\n";
+  s += "s10trailbr=" + String(g_cfg.s10_trailBrightness) + "\n";
+  s += "s10minh=" + String(g_cfg.s10_peakMinHeight) + "\n";
+  s += "s10floath=" + String(g_cfg.s10_floatHeight) + "\n";
+  s += "s10anim=" + String(g_cfg.s10_enableAnimation ? 1 : 0) + "\n";
+  
+  return s;
+}
+
+// Funkcja parsująca konfigurację z String (dla main.cpp)
+void analyzerStyleLoadFromString(const String& content)
+{
+  if (content.length() == 0) {
+    g_loadStatus = "BŁĄD: Pusty content";
+    g_loadedParamsCount = 0;
+    return;
+  }
+
+  g_loadedParamsCount = 0;
+  g_loadStatus = "OK: Rozpoczynam parsowanie";
+  
+  // default
+  AnalyzerStyleCfg c = g_cfg;
+  
+  // Parsuj linia po linii
+  int startPos = 0;
+  while (startPos < content.length()) {
+    int endPos = content.indexOf('\n', startPos);
+    if (endPos == -1) endPos = content.length();
+    
+    String line = content.substring(startPos, endPos);
+    line.trim();
+    
+    if (line.length() > 0 && !line.startsWith("#")) {
+      String k, v;
+      if (parseLineKV(line, k, v)) {
+        g_loadedParamsCount++;
+        
+        // Globalne ustawienia
+        if (k == "peakHoldMs")  c.peakHoldTimeMs = (uint16_t)v.toInt();
+        
+        // Styl 5
+        else if (k == "s5w")         c.s5_barWidth = (uint8_t)v.toInt();
+        else if (k == "s5g")         c.s5_barGap   = (uint8_t)v.toInt();
+        else if (k == "s5seg")       c.s5_segments = (uint8_t)v.toInt();
+        else if (k == "s5fill")      c.s5_fill     = v.toFloat();
+        else if (k == "s5segH")      c.s5_segHeight = (uint8_t)v.toInt();
+        else if (k == "s5peaks")     c.s5_showPeaks = v.toInt() != 0;
+        else if (k == "s5smooth")    c.s5_smoothness = (uint8_t)v.toInt();
+        else if (k == "s5barBrightness") c.s5_barBrightness = (uint8_t)v.toInt();
+        else if (k == "s5peakBrightness") c.s5_peakBrightness = (uint8_t)v.toInt();
+
+        // Styl 6
+        else if (k == "s6w")    c.s6_width    = (uint8_t)v.toInt();
+        else if (k == "s6g")    c.s6_gap      = (uint8_t)v.toInt();
+        else if (k == "s6sh")   c.s6_shrink   = (uint8_t)v.toInt();
+        else if (k == "s6fill") c.s6_fill     = v.toFloat();
+        else if (k == "s6min")  c.s6_segMin   = (uint8_t)v.toInt();
+        else if (k == "s6max")  c.s6_segMax   = (uint8_t)v.toInt();
+        else if (k == "s6peaks") c.s6_showPeaks = v.toInt() != 0;
+        else if (k == "s6smooth") c.s6_smoothness = (uint8_t)v.toInt();
+        else if (k == "s6barBrightness") c.s6_barBrightness = (uint8_t)v.toInt();
+        else if (k == "s6peakBrightness") c.s6_peakBrightness = (uint8_t)v.toInt();
+
+        // Styl 7
+        else if (k == "s7radius") c.s7_circleRadius = (uint8_t)v.toInt();
+        else if (k == "s7gap")   c.s7_circleGap = (uint8_t)v.toInt();
+        else if (k == "s7filled") c.s7_filled = v.toInt() != 0;
+        else if (k == "s7max")   c.s7_maxHeight = (uint8_t)v.toInt();
+
+        // Styl 8
+        else if (k == "s8thick") c.s8_lineThickness = (uint8_t)v.toInt();
+        else if (k == "s8gap")   c.s8_lineGap = (uint8_t)v.toInt();
+        else if (k == "s8grad")  c.s8_gradient = v.toInt() != 0;
+        else if (k == "s8max")   c.s8_maxHeight = (uint8_t)v.toInt();
+        
+        // Styl 9
+        else if (k == "s9radius") c.s9_starRadius = (uint8_t)v.toInt();
+        else if (k == "s9armw")   c.s9_armWidth = (uint8_t)v.toInt();
+        else if (k == "s9arml")   c.s9_armLength = (uint8_t)v.toInt();
+        else if (k == "s9spike")  c.s9_spikeLength = (uint8_t)v.toInt();
+        else if (k == "s9spikes") c.s9_showSpikes = v.toInt() != 0;
+        else if (k == "s9filled") c.s9_filled = v.toInt() != 0;
+        else if (k == "s9center") c.s9_centerSize = (uint8_t)v.toInt();
+        else if (k == "s9smooth") c.s9_smoothness = (uint8_t)v.toInt();
+
+        // Styl 10 - Floating Peaks
+        else if (k == "s10barw")     c.s10_barWidth = (uint8_t)v.toInt();
+        else if (k == "s10gap")      c.s10_barGap = (uint8_t)v.toInt();
+        else if (k == "s10segh")     c.s10_segmentHeight = (uint8_t)v.toInt();
+        else if (k == "s10segg")     c.s10_segmentGap = (uint8_t)v.toInt();
+        else if (k == "s10maxp")     c.s10_maxPeaks = (uint8_t)v.toInt();
+        else if (k == "s10hold")     c.s10_peakHoldTime = (uint16_t)v.toInt();
+        else if (k == "s10speed")    c.s10_peakFloatSpeed = (uint8_t)v.toInt();
+        else if (k == "s10fade")     c.s10_peakFadeSteps = (uint8_t)v.toInt();
+        else if (k == "s10trail")    c.s10_trailLength = (uint8_t)v.toInt();
+        else if (k == "s10trails")   c.s10_showTrails = v.toInt() != 0;
+        else if (k == "s10smooth")   c.s10_smoothness = (uint8_t)v.toInt();
+        else if (k == "s10barbr")    c.s10_barBrightness = (uint8_t)v.toInt();
+        else if (k == "s10peakbr")   c.s10_peakBrightness = (uint8_t)v.toInt();
+        else if (k == "s10trailbr")  c.s10_trailBrightness = (uint8_t)v.toInt();
+        else if (k == "s10minh")     c.s10_peakMinHeight = (uint8_t)v.toInt();
+        else if (k == "s10floath")   c.s10_floatHeight = (uint8_t)v.toInt();
+        else if (k == "s10anim")     c.s10_enableAnimation = v.toInt() != 0;
+      }
+    }
+    
+    startPos = endPos + 1;
+  }
+  
+  analyzerSetStyle(c);
+  g_loadStatus = "OK: Załadowano " + String(g_loadedParamsCount) + " parametrów";
+}
+
+// Funkcja zwracająca status wczytania
+String analyzerGetLoadStatus()
+{
+  return g_loadStatus;
+}
+
+// Funkcja zwracająca liczbę załadowanych parametrów
+int analyzerGetLoadedParamsCount()
+{
+  return g_loadedParamsCount;
+}
+
 String analyzerStyleToJson()
 {
   String s;

@@ -1,7 +1,7 @@
-bblanchon/ArduinoJson@^6.21.3
 ESP32Async/AsyncTCP @3.4.1
 ESP32Async/ESPAsyncWebServer @3.7.7
 tzapu/WiFiManager@^2.0.17
-https://github.com/schreibfaul1/ESP32-audioI2S#3.4.3
 arduinogetstarted/ezButton@^1.0.6
 olikraus/U8g2@^2.36.5
+https://github.com/schreibfaul1/ESP32-audioI2S.git#3.4.4
+bblanchon/ArduinoJson@^6.21.3

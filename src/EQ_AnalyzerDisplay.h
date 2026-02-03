@@ -107,6 +107,12 @@ void analyzerSetStyle(const AnalyzerStyleCfg& c);
 void analyzerStyleLoad();
 void analyzerStyleSave();
 
+// Funkcje do zapisu/odczytu stylu jako String (dla main.cpp)
+String analyzerStyleToSaveString();
+void analyzerStyleLoadFromString(const String& content);
+String analyzerGetLoadStatus();
+int analyzerGetLoadedParamsCount();
+
 // Strona /analyzer i podgląd /analyzerCfg
 String analyzerBuildHtmlPage();
 String analyzerStyleToJson();
