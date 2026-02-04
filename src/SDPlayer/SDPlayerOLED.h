@@ -43,11 +43,15 @@ public:
     void onRemoteSRC();
     void onRemoteVolUp();
     void onRemoteVolDown();
+    void onRemotePlayPause();  // Play/Pause - dodatkowy przycisk lub OK podczas odtwarzania
+    void onRemoteStop();       // Stop - całkowite zatrzymanie odtwarzania
     
     // Kontrola enkodera
     void onEncoderLeft();
     void onEncoderRight();
     void onEncoderButton();
+    void onEncoderButtonHold(unsigned long holdTime); // Długie przytrzymanie
+    bool checkEncoderLongPress(bool buttonState);     // Sprawdza długie przytrzymanie
     
     // Style wyświetlania
     enum DisplayStyle {
@@ -57,6 +61,7 @@ public:
         STYLE_4 = 4,  // Spektrum częstotliwości
         STYLE_5 = 5,  // Minimalistyczny
         STYLE_6 = 6,  // Album art simulation
+        STYLE_7 = 7,  // Analizator retro z trójkątnymi słupkami
         STYLE_10 = 10 // Pełny ekran z animacją
     };
     
@@ -103,11 +108,22 @@ private:
     unsigned long _lastSrcPressTime;  // Dla podwójnego kliknięcia SRC
     uint8_t _srcClickCount;           // Licznik kliknięć SRC
     
+    // Obsługa enkodera - potrójne kliknięcie i długie przytrzymanie
+    unsigned long _lastEncoderClickTime;
+    uint8_t _encoderClickCount;
+    unsigned long _encoderButtonPressStart;
+    bool _encoderButtonPressed;
+    
     // Animacje
     int _scrollPosition;
     int _animFrame;
     int _scrollTextOffset;        // Offset scrollowania tekstu w liście
     unsigned long _lastScrollTime; // Timer scrollowania tekstu
+    
+    // Komunikaty akcji (pokazywane na 2 sekundy)
+    String _actionMessage;         // Tekst komunikatu (np. "PLAY", "PAUSE", "EXIT")
+    unsigned long _actionMessageTime; // Kiedy pokazano komunikat
+    bool _showActionMessage;       // Czy pokazywać komunikat
     
     // Odświeżanie listy plików
     void refreshFileList();
@@ -122,6 +138,7 @@ private:
     void renderStyle4();  // Spektrum
     void renderStyle5();  // Minimal
     void renderStyle6();  // Album art
+    void renderStyle7();  // Analizator retro
     void renderStyle10(); // Full screen animated
     
     // Pomocnicze
@@ -130,6 +147,15 @@ private:
     void drawVolumeIcon(int x, int y);
     void drawScrollBar(int itemCount, int visibleCount);
     String truncateString(const String& str, int maxWidth);
+    void showActionMessage(const String& message);  // Pokazuje komunikat na 2 sek
+    void drawControlIcons();  // Rysuje ikonki przycisków
+    void drawIconPrev(int x, int y);    // ⏮️ Previous
+    void drawIconUp(int x, int y);      // ⬆️ Up
+    void drawIconPause(int x, int y);   // ⏸️ Pause
+    void drawIconPlay(int x, int y);    // ▶️ Play
+    void drawIconStop(int x, int y);    // ⏹️ Stop
+    void drawIconNext(int x, int y);    // ⏭️ Next
+    void drawIconDown(int x, int y);    // ⬇️ Down
     
     // Nawigacja
     void scrollUp();

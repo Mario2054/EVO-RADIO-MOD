@@ -49,11 +49,12 @@ static const char SDPLAYER_HTML[] PROGMEM = R"HTML(
   <div class="info">
     <div>Current Directory: <b id="cwd">/</b></div>
     <div>Now Playing: <b id="now">None</b></div>
+    <div>Status: <b id="playStatus">Stopped</b></div>
   </div>
 
   <div class="btnrow">
     <button onclick="post('/sdplayer/api/playSelected')">Play Selected</button>
-    <button onclick="post('/sdplayer/api/pause')">Pause</button>
+    <button id="pauseBtn" onclick="post('/sdplayer/api/pause')">Pause / Resume</button>
     <button onclick="post('/sdplayer/api/stop')">Stop</button>
     <button onclick="post('/sdplayer/api/next')">Next</button>
     <button onclick="post('/sdplayer/api/prev')">Previous</button>
@@ -141,6 +142,24 @@ function render(){
     document.getElementById('now').innerText=data.now||'None';
     document.getElementById('vol').innerText=data.vol||0;
     document.getElementById('volr').value=data.vol||0;
+    
+    // Aktualizuj status odtwarzania
+    const playStatus = document.getElementById('playStatus');
+    if(playStatus){
+      playStatus.innerText = data.status || 'Stopped';
+    }
+    
+    // Aktualizuj tekst przycisku Pause/Resume
+    const pauseBtn = document.getElementById('pauseBtn');
+    if(pauseBtn && data.status){
+      if(data.status === 'Playing'){
+        pauseBtn.innerText = 'Pause';
+      } else if(data.status === 'Paused'){
+        pauseBtn.innerText = 'Resume';
+      } else {
+        pauseBtn.innerText = 'Pause / Resume';
+      }
+    }
 
     const s=document.getElementById('status');
     s.className='status active';

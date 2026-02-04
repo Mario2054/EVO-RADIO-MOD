@@ -124,6 +124,15 @@ void SDPlayerWebUI::handleList(AsyncWebServerRequest *request) {
     doc["cwd"] = _currentDir;
     doc["now"] = _currentFile;
     
+    // Status odtwarzania
+    if (_isPaused) {
+        doc["status"] = "Paused";
+    } else if (_isPlaying) {
+        doc["status"] = "Playing";
+    } else {
+        doc["status"] = "Stopped";
+    }
+    
     // Synchronizuj volume z globalnym Audio
     if (_audio) {
         _volume = _audio->getVolume();
@@ -235,6 +244,9 @@ void SDPlayerWebUI::playFile(const String& path) {
         _audio->stopSong();  // Zatrzymaj obecną muzykę
         if (_audio->connecttoFS(SD, path.c_str())) {
             // Serial.println("SDPlayerWebUI: Audio started playing from SD");
+            // Ustaw flagę globalną
+            extern bool sdPlayerPlayingMusic;
+            sdPlayerPlayingMusic = true;
         } else {
             // Serial.println("SDPlayerWebUI: ERROR - Failed to play file!");
             _isPlaying = false;
@@ -270,17 +282,38 @@ void SDPlayerWebUI::playIndex(int index) {
 }
 
 void SDPlayerWebUI::pause() {
-    if (_isPlaying && _audio) {
+    if (_audio) {
         _isPaused = !_isPaused;
-        // Serial.println(_isPaused ? "SDPlayerWebUI: Paused" : "SDPlayerWebUI: Resumed");
-        _audio->pauseResume();
+        
+        if (_isPaused) {
+            // PAUZA = STOP (bezpieczniejsze niż pauseResume() które crashuje FreeRTOS)
+            Serial.println("SDPlayerWebUI: Paused (STOP)");
+            _audio->stopSong();
+            extern bool sdPlayerPlayingMusic;
+            sdPlayerPlayingMusic = false;
+        } else {
+            // WZNOWIENIE = Odtwórz ten sam plik od nowa
+            Serial.println("SDPlayerWebUI: Resumed (RESTART)");
+            if (_selectedIndex >= 0 && _selectedIndex < _fileList.size()) {
+                FileItem& item = _fileList[_selectedIndex];
+                String fullPath = _currentDir;
+                if (fullPath != "/") fullPath += "/";
+                fullPath += item.name;
+                
+                _audio->stopSong();
+                if (_audio->connecttoFS(SD, fullPath.c_str())) {
+                    extern bool sdPlayerPlayingMusic;
+                    sdPlayerPlayingMusic = true;
+                }
+            }
+        }
         
         // Aktualizuj OLED
         if (_oled && _oled->isActive()) {
             _oled->loop();
         }
-    } else if (!_audio) {
-        // Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
+    } else {
+        Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
     }
 }
 
@@ -292,6 +325,9 @@ void SDPlayerWebUI::stop() {
     
     if (_audio) {
         _audio->stopSong();
+        // Resetuj flagę globalną
+        extern bool sdPlayerPlayingMusic;
+        sdPlayerPlayingMusic = false;
     } else {
         // Serial.println("SDPlayerWebUI: ERROR - Audio pointer is NULL!");
     }

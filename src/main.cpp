@@ -4369,6 +4369,12 @@ void volumeFadeOut(uint8_t time_ms)
 
 void changeStation() 
 {
+  // ZABEZPIECZENIE: NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+  if (sdPlayerOLEDActive) {
+    Serial.println("DEBUG: changeStation() BLOCKED - SD Player is active!");
+    return;
+  }
+  
   fwupd = false;
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_fub14_tf); // cziocnka 14x11
@@ -6555,11 +6561,14 @@ void displayDimmer(bool dimmerON)
 
       if (bankMenuEnable == true)
       {
-        bankMenuEnable = false;
-        fetchStationsFromServer();
-        changeStation();
-        displayRadio();
-        clearFlags();
+        // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+        if (!sdPlayerOLEDActive) {
+          bankMenuEnable = false;
+          fetchStationsFromServer();
+          changeStation();
+          displayRadio();
+          clearFlags();
+        }
         return;
       }
       else if (bankMenuEnable == false)
@@ -6610,12 +6619,15 @@ void displayDimmer(bool dimmerON)
 
     if (button1.isReleased() && listedStations) 
     {
-      listedStations = false;
-      volumeSet = false;
-      changeStation();
-      displayRadio();
-      //u8g2.sendBuffer();
-      clearFlags();
+      // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+      if (!sdPlayerOLEDActive) {
+        listedStations = false;
+        volumeSet = false;
+        changeStation();
+        displayRadio();
+        //u8g2.sendBuffer();
+        clearFlags();
+      }
       return;
     }
 
@@ -6627,21 +6639,78 @@ void displayDimmer(bool dimmerON)
 
 void handleEncoder2StationsVolumeClick()
 {
+  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
+  static int encoderClickCount2 = 0;
+  static unsigned long lastEncoderClickTime2 = 0;
+  
+  // Sprawdź triple-click tylko gdy SD Player nieaktywny
+  if (!sdPlayerOLEDActive) {
+    bool isPressed = (digitalRead(SW_PIN2) == LOW);
+    static bool lastPressState2 = false;
+    
+    if (isPressed && !lastPressState2) {
+      // Nowe kliknięcie
+      unsigned long now = millis();
+      if (now - lastEncoderClickTime2 < 600) { // 600ms okno jak w IR Key9
+        encoderClickCount2++;
+      } else {
+        encoderClickCount2 = 1; // Reset po timeout
+      }
+      lastEncoderClickTime2 = now;
+      
+      if (encoderClickCount2 >= 3) {
+        // Triple-click wykryty - aktywuj SD Player
+        if (g_sdPlayerOLED) {
+          g_sdPlayerOLED->activate();
+        }
+        encoderClickCount2 = 0; // Reset
+      }
+    }
+    lastPressState2 = isPressed;
+  }
+  
   // Obsługa SDPlayer OLED
   if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    static unsigned long buttonPressStartTime = 0;
+    static bool wasPressed = false;
+    bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
+    
+    if (isPressed && !wasPressed) {
+      // Przycisk został właśnie wciśnięty
+      buttonPressStartTime = millis();
+      wasPressed = true;
+    } else if (!isPressed && wasPressed) {
+      // Przycisk został zwolniony
+      wasPressed = false;
+      unsigned long pressDuration = millis() - buttonPressStartTime;
+      
+      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
+      if (pressDuration < 4000) {
+        g_sdPlayerOLED->onEncoderButton();
+      }
+    } else if (isPressed && wasPressed) {
+      // Przycisk jest ciągle przytrzymany - sprawdzamy czas
+      unsigned long pressDuration = millis() - buttonPressStartTime;
+      if (pressDuration >= 4000) {
+        // Długie przytrzymanie - wyjście do radia
+        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
+        wasPressed = false; // Reset aby nie wywoływać wielokrotnie
+        return;
+      }
+    }
+    
+    // Obsługa obracania enkodera
     CLK_state2 = digitalRead(CLK_PIN2);
     if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH) {
       if (digitalRead(DT_PIN2) == HIGH) {
-        g_sdPlayerOLED->onEncoderLeft();
+        g_sdPlayerOLED->onEncoderLeft();  // Lewo = Góra
       } else {
-        g_sdPlayerOLED->onEncoderRight();
+        g_sdPlayerOLED->onEncoderRight(); // Prawo = Dół
       }
     }
     prev_CLK_state2 = CLK_state2;
     
-    if (button2.isPressed()) {
-      g_sdPlayerOLED->onEncoderButton();
-    }
     return; // Wyjdź z funkcji - SDPlayer obsłużony
   }
   
@@ -6741,14 +6810,17 @@ void handleEncoder2StationsVolumeClick()
   
   if ((button2.isReleased()) && (listedStations == true)) 
   {
-    listedStations = false;
-    volumeSet = false;
-    changeStation();
-    if (!EQ16_isMenuActive()) {
-      displayRadio();
-      u8g2.sendBuffer();
+    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+    if (!sdPlayerOLEDActive) {
+      listedStations = false;
+      volumeSet = false;
+      changeStation();
+      if (!EQ16_isMenuActive()) {
+        displayRadio();
+        u8g2.sendBuffer();
+      }
+      clearFlags();
     }
-    clearFlags();
   }
 
   if ((button2.isPressed()) && (listedStations == false) && (bankMenuEnable == false)) 
@@ -6763,40 +6835,100 @@ void handleEncoder2StationsVolumeClick()
 
   if ((button2.isPressed()) && (bankMenuEnable == true)) 
   {
-    previous_bank_nr = bank_nr;
+    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+    if (!sdPlayerOLEDActive) {
+      previous_bank_nr = bank_nr;
 
-    station_nr = 1;
+      station_nr = 1;
 
-    fetchStationsFromServer();
-    changeStation();
-    u8g2.clearBuffer();
-    if (!EQ16_isMenuActive()) {
-      displayRadio();
+      fetchStationsFromServer();
+      changeStation();
+      u8g2.clearBuffer();
+      if (!EQ16_isMenuActive()) {
+        displayRadio();
+      }
+
+      volumeSet = false;
+      bankMenuEnable = false;
     }
-
-    volumeSet = false;
-    bankMenuEnable = false;
   }
 
 }
 
 void handleEncoder2VolumeStationsClick()
 {
+  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
+  static int encoderClickCount = 0;
+  static unsigned long lastEncoderClickTime = 0;
+  
+  // Sprawdź triple-click tylko gdy SD Player nieaktywny
+  if (!sdPlayerOLEDActive) {
+    bool isPressed = (digitalRead(SW_PIN2) == LOW);
+    static bool lastPressState = false;
+    
+    if (isPressed && !lastPressState) {
+      // Nowe kliknięcie
+      unsigned long now = millis();
+      if (now - lastEncoderClickTime < 600) { // 600ms okno jak w IR Key9
+        encoderClickCount++;
+      } else {
+        encoderClickCount = 1; // Reset po timeout
+      }
+      lastEncoderClickTime = now;
+      
+      if (encoderClickCount >= 3) {
+        // Triple-click wykryty - aktywuj SD Player
+        if (g_sdPlayerOLED) {
+          g_sdPlayerOLED->activate();
+        }
+        encoderClickCount = 0; // Reset
+      }
+    }
+    lastPressState = isPressed;
+  }
+  
   // Obsługa SDPlayer OLED
   if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    static unsigned long buttonPressStartTime2 = 0;
+    static bool wasPressed2 = false;
+    bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
+    
+    if (isPressed && !wasPressed2) {
+      // Przycisk został właśnie wciśnięty
+      buttonPressStartTime2 = millis();
+      wasPressed2 = true;
+    } else if (!isPressed && wasPressed2) {
+      // Przycisk został zwolniony
+      wasPressed2 = false;
+      unsigned long pressDuration = millis() - buttonPressStartTime2;
+      
+      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
+      if (pressDuration < 4000) {
+        g_sdPlayerOLED->onEncoderButton();
+      }
+    } else if (isPressed && wasPressed2) {
+      // Przycisk jest ciągle przytrzymany - sprawdzamy czas
+      unsigned long pressDuration = millis() - buttonPressStartTime2;
+      if (pressDuration >= 4000) {
+        // Długie przytrzymanie - wyjście do radia
+        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
+        wasPressed2 = false; // Reset aby nie wywoływać wielokrotnie
+        return;
+      }
+    }
+    
+    // Obsługa obracania enkodera
     CLK_state2 = digitalRead(CLK_PIN2);
     if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH) {
       if (digitalRead(DT_PIN2) == HIGH) {
-        g_sdPlayerOLED->onEncoderLeft();
+        g_sdPlayerOLED->onEncoderLeft();  // Lewo = Góra
       } else {
-        g_sdPlayerOLED->onEncoderRight();
+        g_sdPlayerOLED->onEncoderRight(); // Prawo = Dół
       }
     }
     prev_CLK_state2 = CLK_state2;
     
-    if (button2.isPressed()) {
-      g_sdPlayerOLED->onEncoderButton();
-    }
     return; // Wyjdź z funkcji - SDPlayer obsłużony
   }
   
@@ -10510,26 +10642,63 @@ void loop()
       
       // ===== SDPLAYER PILOT ROUTING (PRIORITY) =====
       if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+        // Obsługa dedykowanych przycisków SDPlayera
         if (ir_code == rcCmdArrowUp) {
           g_sdPlayerOLED->onRemoteUp();
-          ir_code = 0; // Zablokuj dalszą obsługę
         }
         else if (ir_code == rcCmdArrowDown) {
           g_sdPlayerOLED->onRemoteDown();
-          ir_code = 0;
         }
         else if (ir_code == rcCmdOk) {
           g_sdPlayerOLED->onRemoteOK();
-          ir_code = 0;
         }
         else if (ir_code == rcCmdSrc) {
           // SRC - zmiana stylu OLED SDPlayera
           g_sdPlayerOLED->nextStyle();
-          Serial.println("DEBUG: SDPlayer style changed");
-          ir_code = 0;
+          Serial.println("DEBUG: SDPlayer style changed via SRC");
+        }
+        else if (ir_code == rcCmdBT) {
+          // BT button - ponieważ moduł BT usunięty, używamy jako dodatkowy przycisk zmiany stylu
+          g_sdPlayerOLED->nextStyle();
+          Serial.println("DEBUG: SDPlayer style changed via BT button (BT module removed)");
         }
         else if (ir_code == rcCmdBack) {
-          // BACK - wyjście z SDPlayera do radia
+          // BACK - podwójne kliknięcie wychodzi z SDPlayera, pojedyncze = STOP
+          static unsigned long lastBackPress = 0;
+          static uint8_t backClickCount = 0;
+          unsigned long currentTime = millis();
+          
+          if (currentTime - lastBackPress > 600) { // 600ms okno
+            backClickCount = 0; // Reset po timeout
+          }
+          
+          backClickCount++;
+          lastBackPress = currentTime;
+          
+          if (backClickCount >= 2) {
+            // Podwójne kliknięcie - wyjście z SDPlayera
+            Serial.println("DEBUG: Double BACK press - exiting SDPlayer to radio");
+            backClickCount = 0; // Reset
+            
+            g_sdPlayerOLED->deactivate();
+            sdPlayerOLEDActive = false;
+            sdPlayerPlayingMusic = false;
+            audio.stopSong();
+            
+            // Ustaw bank 1, stację 4
+            bank_nr = 1;
+            station_nr = 4;
+            changeStation();
+            displayRadio();
+            u8g2.sendBuffer();
+          } else {
+            // Pojedyncze kliknięcie - STOP
+            g_sdPlayerOLED->onRemoteStop();
+            Serial.println("SD Player: BACK button - STOP (press again quickly to exit)");
+          }
+        }
+        else if (ir_code == rcCmdKey0) {
+          // Key0 - wyjście z SDPlayera do radia
           Serial.println("DEBUG: Exiting SDPlayer to radio Bank 1, Station 4");
           g_sdPlayerOLED->deactivate();
           sdPlayerOLEDActive = false;
@@ -10542,19 +10711,25 @@ void loop()
           changeStation();
           displayRadio();
           u8g2.sendBuffer();
-          ir_code = 0;
         }
         else if (ir_code == rcCmdVolumeUp) {
           g_sdPlayerOLED->onRemoteVolUp();
-          ir_code = 0;
         }
         else if (ir_code == rcCmdVolumeDown) {
           g_sdPlayerOLED->onRemoteVolDown();
-          ir_code = 0;
         }
-        // Jeśli SDPlayer jest aktywny, blokuj resztę pilota (chyba że Key9 dla wyłączenia)
-        if (ir_code != 0 && ir_code != rcCmdKey9) {
-          ir_code = 0; // Zablokuj inne komendy
+        else if (ir_code == rcCmdKey9) {
+          // Key9 - pozostaw bez zmian, obsłuży poniższy kod
+          // NIE BLOKUJ Key9 - pozwól mu przejść dalej
+        }
+        else {
+          // WSZYSTKIE inne przyciski są ignorowane gdy SDPlayer aktywny
+          Serial.printf("DEBUG: SDPlayer active - blocking IR code 0x%04X\n", ir_code);
+        }
+        
+        // Zablokuj WSZYSTKIE komendy oprócz Key9 (dla triple-click exit)
+        if (ir_code != rcCmdKey9) {
+          ir_code = 0;
         }
       }
       // ===== KONIEC SDPLAYER ROUTING =====
