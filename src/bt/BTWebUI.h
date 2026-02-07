@@ -4,6 +4,7 @@
 #include <ArduinoJson.h>
 #include <HardwareSerial.h>
 #include <functional>
+#include <vector>
 
 // Web UI for BT settings (UART controlled). Layout based on your screenshot.
 
@@ -42,7 +43,7 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
     <div><b>Status</b></div>
     <div id="statusBar" class="bar">Bluetooth OFF</div>
     <div class="sub">Mode: <span id="modeTxt">OFF</span></div>
-    <div class="sub">Device: <span id="devTxt">None</span></div>
+    <div class="sub">Device: <span id="devTxt">Ładowanie...</span></div>
   </div>
 
   <div class="card">
@@ -74,10 +75,15 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
   <div class="card">
     <div><b>Actions</b></div>
     <div class="row">
-      <button onclick="post('/bt/api/scan')">Scan Devices</button>
+      <button onclick="scanDevices()">🔍 Scan Devices</button>
       <button onclick="post('/bt/api/disconnect')">Disconnect</button>
       <button class="red" onclick="post('/bt/api/delall')">Delete All Paired</button>
     </div>
+  </div>
+
+  <div class="card" id="devicesCard" style="display:none;">
+    <div><b>📱 Wykryte urządzenia BT</b></div>
+    <div id="devicesList" style="margin-top:10px;"></div>
   </div>
 
   <div class="card">
@@ -87,7 +93,7 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
   <div class="card">
     <div><b>⚠️ Terminal diagnostyczny BT UART</b></div>
     <div class="hint" style="color:#e53935;margin-bottom:12px">
-      <input type="checkbox" id="terminalEnable" onchange="toggleTerminal(this.checked)"/>
+      <input type="checkbox" id="terminalEnable" onchange="toggleTerminal(this.checked)" autocomplete="off"/>
       <label for="terminalEnable">Włącz terminal (komunikacja UART RX19/TX20)</label>
     </div>
     <div id="terminalPanel" style="display:none">
@@ -111,6 +117,45 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
 let terminalActive = false;
 
 function post(url){ fetch(url,{method:'POST'}).then(()=>refresh()); }
+
+function scanDevices(){
+  document.getElementById('devicesCard').style.display='none';
+  document.getElementById('devicesList').innerHTML='<div class="hint">Skanowanie...</div>';
+  fetch('/bt/api/scan',{method:'POST'}).then(()=>{
+    setTimeout(()=>{
+      fetchDevices();
+    }, 3000); // Czekaj 3s na zakończenie skanowania
+  });
+}
+
+function fetchDevices(){
+  fetch('/bt/api/devices').then(r=>r.json()).then(d=>{
+    let html='';
+    if(d.devices && d.devices.length>0){
+      d.devices.forEach(dev=>{
+        html+='<div style="border:1px solid #ddd;padding:8px;margin:5px 0;border-radius:4px;">';
+        html+='<div style="font-weight:bold;">' + (dev.name||'Nieznane') + '</div>';
+        html+='<div style="font-size:11px;color:#666;">' + dev.mac + ' | RSSI: ' + dev.rssi + ' dBm</div>';
+        html+='<button class="small" onclick="connectDevice('+dev.id+')" style="margin-top:5px;">Połącz</button>';
+        html+='</div>';
+      });
+      document.getElementById('devicesCard').style.display='block';
+    } else {
+      html='<div class="hint">Nie znaleziono urządzeń</div>';
+    }
+    document.getElementById('devicesList').innerHTML=html;
+  }).catch(e=>{
+    console.error('Error fetching devices:',e);
+    document.getElementById('devicesList').innerHTML='<div class="hint" style="color:#e53935;">Błąd pobierania listy</div>';
+  });
+}
+
+function connectDevice(id){
+  fetch('/bt/api/connect?id='+id,{method:'POST'}).then(r=>r.text()).then(msg=>{
+    alert(msg);
+    refresh();
+  });
+}
 
 function setMode(m){ fetch('/bt/api/mode?m='+encodeURIComponent(m),{method:'POST'}).then(()=>refresh()); }
 
@@ -156,7 +201,25 @@ function refresh(){
     if(s.btOn){ bar.innerText='Bluetooth ON'; bar.style.background='#2e7d32'; }
     else { bar.innerText='Bluetooth OFF'; bar.style.background='#9e9e9e'; }
     document.getElementById('modeTxt').innerText=s.mode;
-    document.getElementById('devTxt').innerText=(s.conn? (s.name+' ('+s.mac+')') : 'None');
+    
+    // Wyświetl urządzenie
+    let devText = 'Brak połączenia';
+    if(s.conn){
+      if(s.name && s.name !== 'None' && s.name !== ''){
+        devText = s.name + (s.mac && s.mac !== 'None' && s.mac !== '' ? ' (' + s.mac + ')' : '');
+      } else if(s.mac && s.mac !== 'None' && s.mac !== ''){
+        devText = s.mac;
+      } else {
+        devText = 'Połączono (brak danych)';
+      }
+    }
+    let devElement = document.getElementById('devTxt');
+    if(devElement){
+      devElement.innerText = devText;
+    } else {
+      console.error('Element devTxt not found!');
+    }
+    
     document.getElementById('volInput').value=s.vol;
     
     // Synchronizuj stan checkboxa terminalu
@@ -168,6 +231,8 @@ function refresh(){
       document.getElementById('cmd').disabled = !s.terminalEnabled;
       document.getElementById('sendBtn').disabled = !s.terminalEnabled;
     }
+  }).catch(e=>{
+    console.error('Refresh state error:', e);
   });
 
   // Pobieraj logi tylko gdy terminal aktywny
@@ -202,6 +267,24 @@ function back(){
   fetch('/bt/api/back',{method:'POST'}).then(()=>{ window.location.href='/'; });
 }
 
+// Inicjalizacja przy ładowaniu DOM
+window.addEventListener('DOMContentLoaded', function(){
+  // Wymuś synchronizację stanu checkbox z serwera
+  fetch('/bt/api/state').then(r=>r.json()).then(s=>{
+    if(s.terminalEnabled !== undefined){
+      terminalActive = s.terminalEnabled;
+      document.getElementById('terminalEnable').checked = s.terminalEnabled;
+      document.getElementById('terminalPanel').style.display = s.terminalEnabled ? 'block' : 'none';
+      document.getElementById('terminalDisabled').style.display = s.terminalEnabled ? 'none' : 'block';
+      document.getElementById('cmd').disabled = !s.terminalEnabled;
+      document.getElementById('sendBtn').disabled = !s.terminalEnabled;
+      console.log('Terminal state synchronized from server:', s.terminalEnabled);
+    }
+  }).catch(e=>{
+    console.error('Failed to sync terminal state:', e);
+  });
+});
+
 setInterval(refresh, 1200);
 refresh();
 </script>
@@ -221,6 +304,14 @@ public:
     String getLastResponse() { return _lastResponse; }
     
 private:
+    // Struktura wykrytego urządzenia BT
+    struct BTDevice {
+        int id;
+        String mac;
+        int rssi;
+        String name;
+    };
+    
     AsyncWebServer* _server;
     HardwareSerial* _btSerial;
     std::function<void()> _exitCallback;
@@ -233,6 +324,10 @@ private:
     bool _connected;
     String _deviceName;
     String _deviceMac;
+    
+    // Wykryte urządzenia podczas SCAN
+    std::vector<BTDevice> _scannedDevices;
+    bool _isScanning;
     
     // Bufor konsoli
     String _consoleLog;
@@ -247,6 +342,14 @@ private:
     
     // Kontrola terminala
     bool _terminalEnabled;
+    
+    // Diagnostyka UART
+    String _lastUartRxLines; // Ostatnie 5 odebranych linii
+    unsigned long _lastUartRxTime;
+    unsigned long _lastUartResponseTime; // Timestamp ostatniej odpowiedzi STATE/OK/PONG
+    String _lastCommandSent;
+    static const int MAX_DIAG_SIZE = 500;
+    static const unsigned long UART_TIMEOUT_MS = 10000; // 10 sekund bez odpowiedzi = BT OFF
     
     void addToLog(const String& line);
     void processUartLine(const String& line);
@@ -266,4 +369,7 @@ private:
     void handleCmd(AsyncWebServerRequest *request);
     void handleBack(AsyncWebServerRequest *request);
     void handleTerminalEnable(AsyncWebServerRequest *request);
+    void handleDevices(AsyncWebServerRequest *request);
+    void handleConnect(AsyncWebServerRequest *request);
+    void handleDiag(AsyncWebServerRequest *request);
 };

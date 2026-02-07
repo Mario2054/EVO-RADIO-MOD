@@ -9545,100 +9545,30 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
     });
     
     // =====================================================================================
-    // BLUETOOTH WEB ENDPOINTS (DISABLED - KCX MODULE REMOVED)
-    // =====================================================================================
-    /*
-    server.on("/bt", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String html = FPSTR(bt_html);
-      BTState state = BT_getState();
-      
-      // Status class
-      if (state.mode == BT_MODE_OFF || !state.enabled) {
-        html.replace(F("%BT_STATUS_CLASS%"), "off");
-        html.replace(F("%BT_STATUS%"), "Bluetooth OFF");
-      } else if (state.connected) {
-        html.replace(F("%BT_STATUS_CLASS%"), "connected");
-        html.replace(F("%BT_STATUS%"), "Connected");
-      } else {
-        html.replace(F("%BT_STATUS_CLASS%"), "disconnected");
-        html.replace(F("%BT_STATUS%"), "Disconnected");
-      }
-      
-      // Mode text
-      html.replace(F("%BT_MODE%"), BT_getModeString(state.mode));
-      html.replace(F("%BT_MODE_VAL%"), String((int)state.mode));
-      
-      // Device name
-      html.replace(F("%BT_DEVICE%"), state.deviceName.length() > 0 ? state.deviceName : "None");
-      
-      // Volume
-      html.replace(F("%BT_VOLUME%"), String(state.volume));
-      
-      // Active buttons
-      html.replace(F("%BT_OFF_ACTIVE%"), state.mode == BT_MODE_OFF ? "active" : "");
-      html.replace(F("%BT_RX_ACTIVE%"), state.mode == BT_MODE_RX ? "active" : "");
-      html.replace(F("%BT_TX_ACTIVE%"), state.mode == BT_MODE_TX ? "active" : "");
-      html.replace(F("%BT_AUTO_ACTIVE%"), state.mode == BT_MODE_AUTO ? "active" : "");
-      
-      request->send(200, "text/html", html);
-    });
-    
-    server.on("/bt/mode", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("m")) {
-        int mode = request->getParam("m")->value().toInt();
-        // BT_setMode((BTMode)mode);
-        Serial.printf("BT Web: Mode set to %d\n", mode);
-      }
-      request->send(200, "text/plain", "OK");
-    });
-    
-    server.on("/bt/volume", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("v")) {
-        int vol = request->getParam("v")->value().toInt();
-        // BT_setVolume(vol);
-        Serial.printf("BT Web: Volume set to %d\n", vol);
-      }
-      request->send(200, "text/plain", "OK");
-    });
-    
-    server.on("/bt/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
-      // BT_startScan();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='3;url=/bt'></head><body><h1>Scanning for Bluetooth devices...</h1></body></html>");
-    });
-    
-    server.on("/bt/disconnect", HTTP_GET, [](AsyncWebServerRequest *request) {
-      // BT_disconnect();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>Bluetooth Disconnected</h1></body></html>");
-    });
-    
-    server.on("/bt/deleteall", HTTP_GET, [](AsyncWebServerRequest *request) {
-      // BT_deleteAllPairedDevices();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>All paired devices deleted</h1></body></html>");
-    });
-    
-    server.on("/bt/save", HTTP_POST, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("mode", true)) {
-        int mode = request->getParam("mode", true)->value().toInt();
-        // BT_setMode((BTMode)mode);
-      }
-      if (request->hasParam("volume", true)) {
-        int vol = request->getParam("volume", true)->value().toInt();
-        // BT_setVolume(vol);
-      }
-      BT_saveConfig();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>Bluetooth Settings Saved!</h1></body></html>");
-    });
-    */
-    
-    // =====================================================================================
     // SDPLAYER WEB ENDPOINTS
     // =====================================================================================
     SDPlayerWebUI_registerHandlers(server);  // Rejestracja handlerów SDPlayer
     
     // =====================================================================================
-    // BLUETOOTH WEBUI ENDPOINTS
+    // BLUETOOTH WEBUI ENDPOINTS (MUST BE REGISTERED BEFORE OTHER /bt ROUTES)
     // =====================================================================================
     BTWebUI_registerHandlers(server);  // Rejestracja handlerów BTWebUI
+    
+    // TESTOWY ENDPOINT - sprawdzenie czy routing działa
+    server.on("/bt/api/maintest", HTTP_GET, [](AsyncWebServerRequest *request) {
+        Serial.println("[MAIN TEST] Direct test endpoint called!");
+        request->send(200, "text/plain", "MAIN.CPP TEST OK - direct routing works!");
+    });
+    
+    // =====================================================================================
+    // OLD BT ENDPOINTS - DISABLED (commented out to avoid conflicts)
+    // =====================================================================================
+    // NOTE: All old /bt routes are commented out to prevent conflicts with BTWebUI
+    /*
+    server.on("/bt", HTTP_GET, [](AsyncWebServerRequest *request) {
+      ... old code ...
+    });
+    */
     
     server.on("/toggleAdcDebug", HTTP_POST, [](AsyncWebServerRequest *request) 
     {
