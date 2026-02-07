@@ -218,6 +218,7 @@ public:
     void stop();
     void next();
     void prev();
+    void playNextAuto(); // Automatyczne odtwarzanie następnego utworu (zapętlenie)
     void setVolume(int vol);
     
     // Zarządzanie katalogiem
@@ -230,6 +231,7 @@ public:
     bool isPaused() { return _isPaused; }
     String getCurrentFile() { return _currentFile; }
     int getVolume() { return _volume; }
+    int getSelectedIndex() const { return _selectedIndex; }  // Zwraca aktualny indeks zaznaczonego pliku
 
 private:
     AsyncWebServer* _server;

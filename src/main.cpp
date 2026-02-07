@@ -254,6 +254,7 @@ bool  f_callInfo = 0;       // Info
 // SDPlayer global flags
 bool sdPlayerOLEDActive = false;   // Czy SDPlayer OLED jest aktywny
 bool sdPlayerPlayingMusic = false; // Czy SDPlayer odtwarza muzykę
+bool sdPlayerAutoPlayNext = false; // Flaga żądania automatycznego odtworzenia następnego utworu
 
 int currentSelection = 0;                     // Numer aktualnego wyboru na ekranie OLED
 int firstVisibleLine = 0;                     // Numer pierwszej widocznej linii na ekranie OLED
@@ -3688,7 +3689,13 @@ void my_audio_info(Audio::msg_t m)
     case Audio::evt_eof:
     {
       Serial.printf("end of file:  %s\n", m.msg);
-      if (resumePlay == true)
+      
+      // Sprawdź czy SDPlayer odtwarza muzykę - jeśli tak, ustaw flagę auto-play
+      if (sdPlayerPlayingMusic && g_sdPlayerWeb) {
+        Serial.println("[SDPlayer] Koniec utworu - żądanie automatycznego przejścia do następnego");
+        sdPlayerAutoPlayNext = true; // Ustaw flagę - obsługa w głównej pętli loop()
+      }
+      else if (resumePlay == true)
       {
         ir_code = rcCmdOk; // Przypisujemy kod pilota - OK
         bit_count = 32;
@@ -10538,6 +10545,13 @@ void loop()
   // BT_loop();              // Obsługa modułu Bluetooth KCX_BT_EMITTER (tylko if-y, bez tasków)
   SDPlayerOLED_loop();    // Obsługa SDPlayer OLED
   BTWebUI_loop();         // Obsługa Bluetooth WebUI
+  
+  // Obsługa auto-play SDPlayera (w głównej pętli, nie w callback Audio)
+  if (sdPlayerAutoPlayNext && g_sdPlayerWeb && sdPlayerPlayingMusic) {
+    sdPlayerAutoPlayNext = false; // Zresetuj flagę
+    Serial.println("[SDPlayer] Wykonywanie auto-play następnego utworu");
+    g_sdPlayerWeb->playNextAuto();
+  }
   button2.loop();         // Wykonuje pętlę dla obiektu button2 (sprawdza stan przycisku z enkodera 2)
   handleButtons();        // Wywołuje funkcję obsługującą przyciski i wykonuje odpowiednie akcje (np. zmiana opcji, wejście do menu)
   handleFadeIn();

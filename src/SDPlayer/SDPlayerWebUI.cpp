@@ -362,6 +362,43 @@ void SDPlayerWebUI::prev() {
     }
 }
 
+void SDPlayerWebUI::playNextAuto() {
+    // Automatyczne odtwarzanie następnego utworu po zakończeniu obecnego
+    if (_selectedIndex < _fileList.size() - 1) {
+        // Znajdź następny plik audio (pomiń katalogi)
+        bool foundNext = false;
+        for (int i = _selectedIndex + 1; i < _fileList.size(); i++) {
+            if (!_fileList[i].isDir) {
+                playIndex(i);
+                foundNext = true;
+                Serial.println("[SDPlayer] Auto-play: Następny utwór #" + String(i));
+                break;
+            }
+        }
+        
+        // Jeśli nie znaleziono następnego, wróć na początek listy
+        if (!foundNext) {
+            // Znajdź pierwszy plik audio od początku
+            for (int i = 0; i < _fileList.size(); i++) {
+                if (!_fileList[i].isDir) {
+                    playIndex(i);
+                    Serial.println("[SDPlayer] Auto-play: Koniec listy - powrót na początek, utwór #" + String(i));
+                    break;
+                }
+            }
+        }
+    } else {
+        // Koniec listy - wróć na początek
+        for (int i = 0; i < _fileList.size(); i++) {
+            if (!_fileList[i].isDir) {
+                playIndex(i);
+                Serial.println("[SDPlayer] Auto-play: Koniec listy - powrót na początek, utwór #" + String(i));
+                break;
+            }
+        }
+    }
+}
+
 void SDPlayerWebUI::setVolume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 21) vol = 21;

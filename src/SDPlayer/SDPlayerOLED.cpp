@@ -65,6 +65,22 @@ void SDPlayerOLED::loop() {
     
     unsigned long now = millis();
     
+    // Synchronizuj _selectedIndex z SDPlayerWebUI (dla auto-play)
+    if (_player && _mode == MODE_NORMAL) {
+        int webIndex = _player->getSelectedIndex();
+        if (webIndex != _selectedIndex && webIndex >= 0 && webIndex < _fileList.size()) {
+            _selectedIndex = webIndex;
+            // Dostosuj scroll offset aby kursor był widoczny
+            int visibleLines = 4;  // Liczba widocznych linii na ekranie
+            if (_selectedIndex < _scrollOffset) {
+                _scrollOffset = _selectedIndex;
+            }
+            if (_selectedIndex >= _scrollOffset + visibleLines) {
+                _scrollOffset = _selectedIndex - visibleLines + 1;
+            }
+        }
+    }
+    
     // Splash screen przez 1.5s
     if (_mode == MODE_SPLASH) {
         if (now - _splashStartTime > 1500) {

@@ -123,7 +123,11 @@ function setBoost(b){ fetch('/bt/api/boost?b='+encodeURIComponent(b),{method:'PO
 
 function toggleTerminal(enabled){
   terminalActive = enabled;
-  fetch('/bt/api/terminal?enable='+(enabled?'1':'0'),{method:'POST'}).then(()=>{
+  console.log('BT Terminal:', enabled ? 'ENABLING' : 'DISABLING');
+  fetch('/bt/api/terminal?enable='+(enabled?'1':'0'),{method:'POST'}).then(r=>{
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }).then(()=>{
     document.getElementById('terminalPanel').style.display = enabled ? 'block' : 'none';
     document.getElementById('terminalDisabled').style.display = enabled ? 'none' : 'block';
     document.getElementById('cmd').disabled = !enabled;
@@ -131,6 +135,10 @@ function toggleTerminal(enabled){
     if(!enabled){
       document.getElementById('console').textContent = '';
     }
+    console.log('BT Terminal:', enabled ? 'ENABLED' : 'DISABLED');
+  }).catch(e=>{
+    console.error('Terminal toggle error:', e);
+    alert('Błąd przełączania terminala: ' + e.message);
   });
 }
 
@@ -164,10 +172,28 @@ function refresh(){
 
   // Pobieraj logi tylko gdy terminal aktywny
   if(terminalActive){
-    fetch('/bt/api/log').then(r=>r.text()).then(t=>{
+    fetch('/bt/api/log', {
+      method: 'GET',
+      headers: {'Accept': 'text/plain'},
+      cache: 'no-cache'
+    }).then(r=>{
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      const ct = r.headers.get('Content-Type');
+      if(ct && ct.includes('html')){
+        console.error('BT Log endpoint returned HTML instead of text!');
+        return '[ERROR] Otrzymano HTML zamiast logu. Sprawdź konsolę przeglądarki.';
+      }
+      return r.text();
+    }).then(t=>{
       const c=document.getElementById('console');
       c.textContent=t;
       c.scrollTop=c.scrollHeight;
+    }).catch(e=>{
+      console.error('BT Log fetch error:', e);
+      const c=document.getElementById('console');
+      if(c.textContent.indexOf('[ERROR]') < 0){
+        c.textContent += '\n[ERROR] Nie można pobrać logu: ' + e.message;
+      }
     });
   }
 }
@@ -216,6 +242,8 @@ private:
     String _uartBuffer;
     String _lastResponse;
     unsigned long _lastCmdTime;
+    unsigned long _lastStatusPoll;
+    int _garbageLines;  // Licznik odrzuconych śmieci
     
     // Kontrola terminala
     bool _terminalEnabled;
