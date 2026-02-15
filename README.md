@@ -1,5 +1,5 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
-Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.70b MOD SDP_BT_EQ16_ANALIZATOR
+Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.53 MOD SDP_BT_EQ16_ANALIZATOR
 <img width="627" height="909" alt="image" src="https://github.com/user-attachments/assets/b0f14f83-5e70-4521-8c4e-8874791692c0" />
 
 <img width="366" height="905" alt="image" src="https://github.com/user-attachments/assets/6c65bb35-fa0e-49a1-8c80-e45ce4023999" />
