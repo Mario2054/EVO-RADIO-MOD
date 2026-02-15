@@ -1,10 +1,12 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
-Dodaje modyfikacje do projektu EVO3 
+Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.70b MOD SDP_BT_EQ16_ANALIZATOR
+<img width="627" height="909" alt="image" src="https://github.com/user-attachments/assets/b0f14f83-5e70-4521-8c4e-8874791692c0" />
 
-<img width="498" height="781" alt="image" src="https://github.com/user-attachments/assets/55817c32-842d-4a41-a41d-2be92e78c8d0" />
+<img width="366" height="905" alt="image" src="https://github.com/user-attachments/assets/6c65bb35-fa0e-49a1-8c80-e45ce4023999" />
+<img width="737" height="902" alt="image" src="https://github.com/user-attachments/assets/bc67c513-2837-47a7-9187-8606348c30f8" />
+<img width="883" height="744" alt="image" src="https://github.com/user-attachments/assets/b3d19d65-0937-4e90-9c10-c64100415bf0" />
+<img width="878" height="424" alt="image" src="https://github.com/user-attachments/assets/16c1b6f0-d576-431c-a647-d4f62200563d" />
+<img width="861" height="758" alt="image" src="https://github.com/user-attachments/assets/1a5b7249-e896-4f2e-b820-9e3051544f89" />
+<img width="852" height="851" alt="image" src="https://github.com/user-attachments/assets/c5e6f970-5d10-4224-a99c-7c7948abd494" />
 
-<img width="380" height="880" alt="image" src="https://github.com/user-attachments/assets/09441cda-3d18-46ff-8f9d-7c14e1d5918f" />
-
-<img width="1232" height="855" alt="image" src="https://github.com/user-attachments/assets/128e40ed-1cab-4c19-a214-c0fb54191b5b" />
-<img width="968" height="903" alt="image" src="https://github.com/user-attachments/assets/3fbbfefd-649d-4ffd-8b1f-a79b0e26d938" />
 
