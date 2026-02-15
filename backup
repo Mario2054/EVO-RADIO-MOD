@@ -94,7 +94,7 @@
 #define MAX_FILES 100            // Maksymalna liczba plików lub katalogów w tablicy directoriesz
 
 #define bank_nr_max 16           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
-#define displayModeMax 4         // Ogrniczenie maksymalnej ilosci trybów wyswietlacza OLED
+#define displayModeMax 10       // Ogrniczenie maksymalnej ilosci trybów wyswietlacza OLED
 
 // DEBUG PRINTS - ON/OFF
 #define f_debug_web_on 0         // Flaga właczenia wydruku debug_web

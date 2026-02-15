@@ -23,6 +23,7 @@
 extern String stationName;
 extern String stationNameStream;
 extern String stationStringWeb;
+extern String streamCodec;
 extern uint8_t volumeValue;
 extern bool volumeMute;
 extern U8G2_SSD1322_NHD_256X64_F_4W_HW_SPI u8g2;
@@ -180,24 +181,6 @@ void analyzerSetStyle(const AnalyzerStyleCfg& in)
   if (c.s6_segMax < c.s6_segMin) c.s6_segMax = c.s6_segMin;
   c.s6_smoothness = clampU8(c.s6_smoothness, 10, 90);
 
-  // Styl 7
-  c.s7_circleRadius = clampU8(c.s7_circleRadius, 1, 8);
-  c.s7_circleGap = clampU8(c.s7_circleGap, 1, 8);
-  c.s7_maxHeight = clampU8(c.s7_maxHeight, 20, 60);
-
-  // Styl 8
-  c.s8_lineThickness = clampU8(c.s8_lineThickness, 1, 5);
-  c.s8_lineGap = clampU8(c.s8_lineGap, 0, 8);
-  c.s8_maxHeight = clampU8(c.s8_maxHeight, 30, 64);
-
-  // Styl 9
-  c.s9_starRadius = clampU8(c.s9_starRadius, 10, 30);
-  c.s9_armWidth = clampU8(c.s9_armWidth, 1, 6);
-  c.s9_armLength = clampU8(c.s9_armLength, 8, 25);
-  c.s9_spikeLength = clampU8(c.s9_spikeLength, 2, 10);
-  c.s9_centerSize = clampU8(c.s9_centerSize, 2, 8);
-  c.s9_smoothness = clampU8(c.s9_smoothness, 10, 90);
-
   // Styl 10 - Floating Peaks
   c.s10_barWidth = clampU8(c.s10_barWidth, 4, 20);
   c.s10_barGap = clampU8(c.s10_barGap, 1, 6);
@@ -237,14 +220,25 @@ static bool parseLineKV(const String& line, String& k, String& v) {
 
 void analyzerStyleLoad()
 {
+  Serial.println("\n=== ANALYZER CONFIG LOAD START ===");
+  Serial.printf("Trying to open: %s\n", kCfgPath);
+  
   // default
   g_cfg = AnalyzerStyleCfg();
   eq6_maxSegments = g_cfg.s6_segMax;
 
   File f = STORAGE.open(kCfgPath, FILE_READ);
-  if (!f) return;
+  if (!f) {
+    Serial.println("ERROR: Cannot open analyzer.cfg file!");
+    Serial.println("=== ANALYZER CONFIG LOAD FAILED ===");
+    return;
+  }
+  
+  Serial.println("File opened successfully");
+  Serial.printf("File size: %d bytes\n", f.size());
 
   AnalyzerStyleCfg c = g_cfg;
+  int loadedParams = 0;
 
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -253,6 +247,7 @@ void analyzerStyleLoad()
 
     String k, v;
     if (!parseLineKV(line, k, v)) continue;
+    loadedParams++;
 
     // Globalne ustawienia
     if (k == "peakHoldMs")  c.peakHoldTimeMs = (uint16_t)v.toInt();
@@ -280,28 +275,6 @@ void analyzerStyleLoad()
     else if (k == "s6barBrightness") c.s6_barBrightness = (uint8_t)v.toInt();
     else if (k == "s6peakBrightness") c.s6_peakBrightness = (uint8_t)v.toInt();
 
-    // Styl 7
-    else if (k == "s7radius") c.s7_circleRadius = (uint8_t)v.toInt();
-    else if (k == "s7gap")   c.s7_circleGap = (uint8_t)v.toInt();
-    else if (k == "s7filled") c.s7_filled = v.toInt() != 0;
-    else if (k == "s7max")   c.s7_maxHeight = (uint8_t)v.toInt();
-
-    // Styl 8
-    else if (k == "s8thick") c.s8_lineThickness = (uint8_t)v.toInt();
-    else if (k == "s8gap")   c.s8_lineGap = (uint8_t)v.toInt();
-    else if (k == "s8grad")  c.s8_gradient = v.toInt() != 0;
-    else if (k == "s8max")   c.s8_maxHeight = (uint8_t)v.toInt();
-    
-    // Styl 9
-    else if (k == "s9radius") c.s9_starRadius = (uint8_t)v.toInt();
-    else if (k == "s9armw")   c.s9_armWidth = (uint8_t)v.toInt();
-    else if (k == "s9arml")   c.s9_armLength = (uint8_t)v.toInt();
-    else if (k == "s9spike")  c.s9_spikeLength = (uint8_t)v.toInt();
-    else if (k == "s9spikes") c.s9_showSpikes = v.toInt() != 0;
-    else if (k == "s9filled") c.s9_filled = v.toInt() != 0;
-    else if (k == "s9center") c.s9_centerSize = (uint8_t)v.toInt();
-    else if (k == "s9smooth") c.s9_smoothness = (uint8_t)v.toInt();
-
     // Styl 10 - Floating Peaks
     else if (k == "s10barw")     c.s10_barWidth = (uint8_t)v.toInt();
     else if (k == "s10gap")      c.s10_barGap = (uint8_t)v.toInt();
@@ -328,8 +301,17 @@ void analyzerStyleLoad()
 
 void analyzerStyleSave()
 {
+  Serial.println("\n=== ANALYZER CONFIG SAVE START ===");
+  Serial.printf("Opening file for write: %s\n", kCfgPath);
+  
   File f = STORAGE.open(kCfgPath, FILE_WRITE);
-  if (!f) return;
+  if (!f) {
+    Serial.println("ERROR: Cannot open file for writing!");
+    Serial.println("=== ANALYZER CONFIG SAVE FAILED ===");
+    return;
+  }
+  
+  Serial.println("File opened for writing");
 
   f.println("# Analyzer style cfg");
   f.println("# Global settings");
@@ -357,29 +339,8 @@ void analyzerStyleSave()
   f.printf("s6barBrightness=%u\n", g_cfg.s6_barBrightness);
   f.printf("s6peakBrightness=%u\n", g_cfg.s6_peakBrightness);
 
-  f.println("# Style7");
-  f.printf("s7radius=%u\n", g_cfg.s7_circleRadius);
-  f.printf("s7gap=%u\n", g_cfg.s7_circleGap);
-  f.printf("s7filled=%u\n", g_cfg.s7_filled ? 1 : 0);
-  f.printf("s7max=%u\n", g_cfg.s7_maxHeight);
-
-  f.println("# Style8");
-  f.printf("s8thick=%u\n", g_cfg.s8_lineThickness);
-  f.printf("s8gap=%u\n", g_cfg.s8_lineGap);
-  f.printf("s8grad=%u\n", g_cfg.s8_gradient ? 1 : 0);
-  f.printf("s8max=%u\n", g_cfg.s8_maxHeight);
-  
-  f.println("# Style9");
-  f.printf("s9radius=%u\n", g_cfg.s9_starRadius);
-  f.printf("s9armw=%u\n", g_cfg.s9_armWidth);
-  f.printf("s9arml=%u\n", g_cfg.s9_armLength);
-  f.printf("s9spike=%u\n", g_cfg.s9_spikeLength);
-  f.printf("s9spikes=%u\n", g_cfg.s9_showSpikes ? 1 : 0);
-  f.printf("s9filled=%u\n", g_cfg.s9_filled ? 1 : 0);
-  f.printf("s9center=%u\n", g_cfg.s9_centerSize);
-  f.printf("s9smooth=%u\n", g_cfg.s9_smoothness);
-
   // Styl 10 - Floating Peaks
+  f.println("# Style10");
   f.printf("s10barw=%u\n", g_cfg.s10_barWidth);
   f.printf("s10gap=%u\n", g_cfg.s10_barGap);
   f.printf("s10segh=%u\n", g_cfg.s10_segmentHeight);
@@ -398,7 +359,11 @@ void analyzerStyleSave()
   f.printf("s10floath=%u\n", g_cfg.s10_floatHeight);
   f.printf("s10anim=%u\n", g_cfg.s10_enableAnimation ? 1 : 0);
   
+  size_t bytesWritten = f.size();
   f.close();
+  
+  Serial.printf("File saved successfully, %d bytes written\n", bytesWritten);
+  Serial.println("=== ANALYZER CONFIG SAVE COMPLETE ===");
 }
 
 // Zmienne dla statusu wczytywania
@@ -435,28 +400,6 @@ String analyzerStyleToSaveString()
   s += "s6smooth=" + String(g_cfg.s6_smoothness) + "\n";
   s += "s6barBrightness=" + String(g_cfg.s6_barBrightness) + "\n";
   s += "s6peakBrightness=" + String(g_cfg.s6_peakBrightness) + "\n";
-  
-  s += "# Style7\n";
-  s += "s7radius=" + String(g_cfg.s7_circleRadius) + "\n";
-  s += "s7gap=" + String(g_cfg.s7_circleGap) + "\n";
-  s += "s7filled=" + String(g_cfg.s7_filled ? 1 : 0) + "\n";
-  s += "s7max=" + String(g_cfg.s7_maxHeight) + "\n";
-  
-  s += "# Style8\n";
-  s += "s8thick=" + String(g_cfg.s8_lineThickness) + "\n";
-  s += "s8gap=" + String(g_cfg.s8_lineGap) + "\n";
-  s += "s8grad=" + String(g_cfg.s8_gradient ? 1 : 0) + "\n";
-  s += "s8max=" + String(g_cfg.s8_maxHeight) + "\n";
-  
-  s += "# Style9\n";
-  s += "s9radius=" + String(g_cfg.s9_starRadius) + "\n";
-  s += "s9armw=" + String(g_cfg.s9_armWidth) + "\n";
-  s += "s9arml=" + String(g_cfg.s9_armLength) + "\n";
-  s += "s9spike=" + String(g_cfg.s9_spikeLength) + "\n";
-  s += "s9spikes=" + String(g_cfg.s9_showSpikes ? 1 : 0) + "\n";
-  s += "s9filled=" + String(g_cfg.s9_filled ? 1 : 0) + "\n";
-  s += "s9center=" + String(g_cfg.s9_centerSize) + "\n";
-  s += "s9smooth=" + String(g_cfg.s9_smoothness) + "\n";
   
   s += "# Style10 - Floating Peaks\n";
   s += "s10barw=" + String(g_cfg.s10_barWidth) + "\n";
@@ -535,28 +478,6 @@ void analyzerStyleLoadFromString(const String& content)
         else if (k == "s6barBrightness") c.s6_barBrightness = (uint8_t)v.toInt();
         else if (k == "s6peakBrightness") c.s6_peakBrightness = (uint8_t)v.toInt();
 
-        // Styl 7
-        else if (k == "s7radius") c.s7_circleRadius = (uint8_t)v.toInt();
-        else if (k == "s7gap")   c.s7_circleGap = (uint8_t)v.toInt();
-        else if (k == "s7filled") c.s7_filled = v.toInt() != 0;
-        else if (k == "s7max")   c.s7_maxHeight = (uint8_t)v.toInt();
-
-        // Styl 8
-        else if (k == "s8thick") c.s8_lineThickness = (uint8_t)v.toInt();
-        else if (k == "s8gap")   c.s8_lineGap = (uint8_t)v.toInt();
-        else if (k == "s8grad")  c.s8_gradient = v.toInt() != 0;
-        else if (k == "s8max")   c.s8_maxHeight = (uint8_t)v.toInt();
-        
-        // Styl 9
-        else if (k == "s9radius") c.s9_starRadius = (uint8_t)v.toInt();
-        else if (k == "s9armw")   c.s9_armWidth = (uint8_t)v.toInt();
-        else if (k == "s9arml")   c.s9_armLength = (uint8_t)v.toInt();
-        else if (k == "s9spike")  c.s9_spikeLength = (uint8_t)v.toInt();
-        else if (k == "s9spikes") c.s9_showSpikes = v.toInt() != 0;
-        else if (k == "s9filled") c.s9_filled = v.toInt() != 0;
-        else if (k == "s9center") c.s9_centerSize = (uint8_t)v.toInt();
-        else if (k == "s9smooth") c.s9_smoothness = (uint8_t)v.toInt();
-
         // Styl 10 - Floating Peaks
         else if (k == "s10barw")     c.s10_barWidth = (uint8_t)v.toInt();
         else if (k == "s10gap")      c.s10_barGap = (uint8_t)v.toInt();
@@ -619,29 +540,7 @@ String analyzerStyleToJson()
   s += "\"s6_segMin\":"   + String(g_cfg.s6_segMin) + ",";
   s += "\"s6_segMax\":"   + String(g_cfg.s6_segMax) + ",";
   s += "\"s6_showPeaks\":" + String(g_cfg.s6_showPeaks ? "true" : "false") + ",";
-  s += "\"s6_smoothness\":" + String(g_cfg.s6_smoothness) + ",";
-
-  // Styl 7
-  s += "\"s7_circleRadius\":" + String(g_cfg.s7_circleRadius) + ",";
-  s += "\"s7_circleGap\":" + String(g_cfg.s7_circleGap) + ",";
-  s += "\"s7_filled\":" + String(g_cfg.s7_filled ? "true" : "false") + ",";
-  s += "\"s7_maxHeight\":" + String(g_cfg.s7_maxHeight) + ",";
-
-  // Styl 8
-  s += "\"s8_lineThickness\":" + String(g_cfg.s8_lineThickness) + ",";
-  s += "\"s8_lineGap\":" + String(g_cfg.s8_lineGap) + ",";
-  s += "\"s8_gradient\":" + String(g_cfg.s8_gradient ? "true" : "false") + ",";
-  s += "\"s8_maxHeight\":" + String(g_cfg.s8_maxHeight) + ",";
-  
-  // Styl 9
-  s += "\"s9_starRadius\":" + String(g_cfg.s9_starRadius) + ",";
-  s += "\"s9_armWidth\":" + String(g_cfg.s9_armWidth) + ",";
-  s += "\"s9_armLength\":" + String(g_cfg.s9_armLength) + ",";
-  s += "\"s9_spikeLength\":" + String(g_cfg.s9_spikeLength) + ",";
-  s += "\"s9_showSpikes\":" + String(g_cfg.s9_showSpikes ? "true" : "false") + ",";
-  s += "\"s9_filled\":" + String(g_cfg.s9_filled ? "true" : "false") + ",";
-  s += "\"s9_centerSize\":" + String(g_cfg.s9_centerSize) + ",";
-  s += "\"s9_smoothness\":" + String(g_cfg.s9_smoothness);
+  s += "\"s6_smoothness\":" + String(g_cfg.s6_smoothness);
   s += "}";
   return s;
 }
@@ -668,8 +567,8 @@ static String htmlHeader(const char* title)
 
 String analyzerBuildHtmlPage()
 {
-  String s = htmlHeader("Analyzer / Style 5-9");
-  s += "<h2>Analizator – ustawienia stylów 5, 6, 7, 8, 9</h2>";
+  String s = htmlHeader("Analyzer / Style 5, 6, 10");
+  s += "<h2>Analizator – ustawienia stylów 5, 6, 10</h2>";
   s += "<p>Tu regulujesz WYGLĄD słupków. Same słupki ruszą dopiero, gdy w /config zaznaczysz <b>FFT analyzer</b>.</p>";
 
   s += "<div class='box'><h3>Ustawienia globalne</h3>";
@@ -713,41 +612,35 @@ String analyzerBuildHtmlPage()
   s += "<div class='row'><label>peak brightness</label><input name='s6peakBrightness' type='number' min='0' max='255' value='" + String(g_cfg.s6_peakBrightness) + "'></div>";
   s += "</div>";
 
-  s += "<div class='box'><h3>Styl 7 (Okrągły)</h3>";
-  s += "<div class='row'><label>circle radius</label><input name='s7radius' type='number' min='1' max='8' value='" + String(g_cfg.s7_circleRadius) + "'></div>";
-  s += "<div class='row'><label>circle gap</label><input name='s7gap' type='number' min='1' max='8' value='" + String(g_cfg.s7_circleGap) + "'></div>";
-  s += "<div class='row'><label>filled circles</label><input name='s7filled' type='checkbox' value='1' " + String(g_cfg.s7_filled ? "checked" : "") + "></div>";
-  s += "<div class='row'><label>max height</label><input name='s7max' type='number' min='20' max='60' value='" + String(g_cfg.s7_maxHeight) + "'></div>";
-  s += "</div>";
-
-  s += "<div class='box'><h3>Styl 8 (Liniowy)</h3>";
-  s += "<div class='row'><label>line thickness</label><input name='s8thick' type='number' min='1' max='5' value='" + String(g_cfg.s8_lineThickness) + "'></div>";
-  s += "<div class='row'><label>line gap</label><input name='s8gap' type='number' min='0' max='8' value='" + String(g_cfg.s8_lineGap) + "'></div>";
-  s += "<div class='row'><label>gradient effect</label><input name='s8grad' type='checkbox' value='1' " + String(g_cfg.s8_gradient ? "checked" : "") + "></div>";
-  s += "<div class='row'><label>max height</label><input name='s8max' type='number' min='30' max='64' value='" + String(g_cfg.s8_maxHeight) + "'></div>";
-  s += "</div>";
-
-  s += "<div class='box'><h3>Styl 9 (Spadające gwiazdki)</h3>";
-  s += "<div class='row'><label>unused (radius)</label><input name='s9radius' type='number' min='10' max='30' value='" + String(g_cfg.s9_starRadius) + "' disabled></div>";
-  s += "<div class='row'><label>unused (arm width)</label><input name='s9armw' type='number' min='1' max='6' value='" + String(g_cfg.s9_armWidth) + "' disabled></div>";
-  s += "<div class='row'><label>max star size</label><input name='s9arml' type='number' min='8' max='25' value='" + String(g_cfg.s9_armLength) + "'></div>";
-  s += "<div class='row'><label>spike length</label><input name='s9spike' type='number' min='2' max='10' value='" + String(g_cfg.s9_spikeLength) + "'></div>";
-  s += "<div class='row'><label>show spikes</label><input name='s9spikes' type='checkbox' value='1' " + String(g_cfg.s9_showSpikes ? "checked" : "") + "></div>";
-  s += "<div class='row'><label>filled centers</label><input name='s9filled' type='checkbox' value='1' " + String(g_cfg.s9_filled ? "checked" : "") + "></div>";
-  s += "<div class='row'><label>min star size</label><input name='s9center' type='number' min='2' max='8' value='" + String(g_cfg.s9_centerSize) + "'></div>";
-  s += "<div class='row'><label>smoothness</label><input name='s9smooth' type='number' min='10' max='90' value='" + String(g_cfg.s9_smoothness) + "'></div>";
-  s += "</div>";
-
   s += "<div class='box'><h3>Styl 10 (Floating Peaks - Ulatujące szczyty)</h3>";
-  s += "<p style='font-size:11px;color:#888'>Bazuje na Styl 5 + szczyty odlatują w górę</p>";
+  s += "<p style='font-size:11px;color:#888'>Bazuje na Styl 5 + szczyty odlatują w górę z efektami świetlnymi</p>";
+  
+  s += "<h4 style='margin:8px 0 4px;color:#4a9eff'>Geometria słupków</h4>";
   s += "<div class='row'><label>bar width (px)</label><input name='s10barw' type='number' min='4' max='20' value='" + String(g_cfg.s10_barWidth) + "'></div>";
   s += "<div class='row'><label>bar gap (px)</label><input name='s10gap' type='number' min='1' max='6' value='" + String(g_cfg.s10_barGap) + "'></div>";
   s += "<div class='row'><label>segment height (px)</label><input name='s10segh' type='number' min='1' max='4' value='" + String(g_cfg.s10_segmentHeight) + "'></div>";
   s += "<div class='row'><label>segment gap (px)</label><input name='s10segg' type='number' min='0' max='3' value='" + String(g_cfg.s10_segmentGap) + "'></div>";
+  
+  s += "<h4 style='margin:12px 0 4px;color:#4a9eff'>Parametry szczytów</h4>";
   s += "<div class='row'><label>max flying peaks</label><input name='s10maxp' type='number' min='1' max='5' value='" + String(g_cfg.s10_maxPeaks) + "'></div>";
-  s += "<div class='row'><label>smoothness</label><input name='s10smooth' type='number' min='10' max='90' value='" + String(g_cfg.s10_smoothness) + "'></div>";
   s += "<div class='row'><label>peak hold time (frames)</label><input name='s10hold' type='number' min='0' max='100' value='" + String(g_cfg.s10_peakHoldTime) + "'></div>";
-  s += "<div class='row'><label>float speed (px/frame)</label><input name='s10speed' type='number' min='1' max='15' value='" + String(g_cfg.s10_peakFloatSpeed) + "'></div>";
+  s += "<div class='row'><label>float speed (px/frame)</label><input name='s10speed' type='number' min='3' max='15' value='" + String(g_cfg.s10_peakFloatSpeed) + "'></div>";
+  s += "<div class='row'><label>fade steps</label><input name='s10fade' type='number' min='5' max='20' value='" + String(g_cfg.s10_peakFadeSteps) + "'></div>";
+  s += "<div class='row'><label>min height (px)</label><input name='s10minh' type='number' min='1' max='8' value='" + String(g_cfg.s10_peakMinHeight) + "'></div>";
+  s += "<div class='row'><label>float height (px)</label><input name='s10floath' type='number' min='8' max='25' value='" + String(g_cfg.s10_floatHeight) + "'></div>";
+  
+  s += "<h4 style='margin:12px 0 4px;color:#4a9eff'>Efekty śladu</h4>";
+  s += "<div class='row'><label>trail length</label><input name='s10trail' type='number' min='3' max='12' value='" + String(g_cfg.s10_trailLength) + "'></div>";
+  s += "<div class='row'><label>show trails</label><input name='s10trails' type='checkbox' value='1' " + String(g_cfg.s10_showTrails ? "checked" : "") + "></div>";
+  
+  s += "<h4 style='margin:12px 0 4px;color:#4a9eff'>Jasność i wygładzanie</h4>";
+  s += "<div class='row'><label>bar brightness</label><input name='s10barbr' type='number' min='50' max='255' value='" + String(g_cfg.s10_barBrightness) + "'></div>";
+  s += "<div class='row'><label>peak brightness</label><input name='s10peakbr' type='number' min='100' max='255' value='" + String(g_cfg.s10_peakBrightness) + "'></div>";
+  s += "<div class='row'><label>trail brightness</label><input name='s10trailbr' type='number' min='80' max='255' value='" + String(g_cfg.s10_trailBrightness) + "'></div>";
+  s += "<div class='row'><label>smoothness</label><input name='s10smooth' type='number' min='10' max='90' value='" + String(g_cfg.s10_smoothness) + "'></div>";
+  
+  s += "<h4 style='margin:12px 0 4px;color:#4a9eff'>Animacja</h4>";
+  s += "<div class='row'><label>enable animation</label><input name='s10anim' type='checkbox' value='1' " + String(g_cfg.s10_enableAnimation ? "checked" : "") + "></div>";
   s += "</div>";
 
   s += "<div class='row'>";
@@ -756,23 +649,6 @@ String analyzerBuildHtmlPage()
   s += "<a href='/analyzerCfg' style='margin-left:12px'>JSON</a>";
   s += "<a href='/analyzerDiag' style='margin-left:12px'>Diagnostyka</a>";
   s += "<a href='/analyzerTest' style='margin-left:12px'>Test Generator</a>";
-  s += "</div>";
-
-  s += "<div class='box'><h3>Diagnostyka Audio</h3>";
-  s += "<p><strong>Problemy z formatami FLAC/AAC?</strong></p>";
-  s += "<ul>";
-  s += "<li>Sprawdź diagnostykę analizatora (link powyżej)</li>";
-  s += "<li>FLAC wymaga więcej CPU - może powodować przerwy</li>";
-  s += "<li>AAC+ i HE-AAC mogą mieć problemy z dekodowaniem</li>";
-  s += "<li>Wysokie bitrate (>320kbps) może przeciążać ESP32</li>";
-  s += "<li>Test Generator symuluje audio gdy brak sygnału</li>";
-  s += "</ul>";
-  s += "<p><strong>Rozwiązania:</strong></p>";
-  s += "<ul>";
-  s += "<li>Użyj stacji MP3 128-192kbps dla najlepszej stabilności</li>";
-  s += "<li>Zrestartuj radio przy problemach z FLAC/AAC</li>";
-  s += "<li>Sprawdź Serial Monitor dla błędów dekodera</li>";
-  s += "</ul>";
   s += "</div>";
 
   s += "</form></body></html>";
@@ -849,17 +725,17 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
   eq_get_analyzer_peaks(peaks);
 
   // Debug co 2 sekundy - sprawdź wartości poziomów
-  static uint32_t lastDebugDisplay = 0;
-  uint32_t now = millis();
-  if (now - lastDebugDisplay > 2000) {
-    // Serial.print("Display levels: "); // Debug disabled
-    for (int i = 0; i < EQ_BANDS; i++) {
-      Serial.print(levels[i], 2);
-      if (i < EQ_BANDS - 1) Serial.print(" ");
-    }
-    Serial.println();
-    lastDebugDisplay = now;
-  }
+  // DEBUG FFT WYŁĄCZONY - zaśmiecał logi podczas SDPlayer
+  // static uint32_t lastDebugDisplay = 0;
+  // uint32_t now = millis();
+  // if (now - lastDebugDisplay > 2000) {
+  //   for (int i = 0; i < EQ_BANDS; i++) {
+  //     Serial.print(levels[i], 2);
+  //     if (i < EQ_BANDS - 1) Serial.print(" ");
+  //   }
+  //   Serial.println();
+  //   lastDebugDisplay = now;
+  // }
 
   // Przepisujemy do eqLevel/eqPeak w skali 0..100 dla rysowania słupków z wygładzaniem
   // Jeśli mute - animacja opadania słupków
@@ -929,38 +805,35 @@ void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem 
     // Nazwa stacji obok zegara
     uint8_t timeWidth = u8g2.getStrWidth(timeString);
     uint8_t xStation  = 4 + timeWidth + 6;
-
-    // Zarezerwuj miejsce do ikony głośnika po prawej
-    uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
+    uint8_t iconX = 256 - 40;
     uint8_t maxStationWidth = 0;
-    if (iconX > xStation + 4)
-      maxStationWidth = iconX - xStation - 4;
+    if (iconX > xStation + 4) maxStationWidth = iconX - xStation - 4;
 
-    if (maxStationWidth > 0)
-    {
+    if (maxStationWidth > 0) {
       String nameToShow = stationName;
-      if (nameToShow.length() == 0)
-      {
-        if (stationNameStream.length() > 0)      nameToShow = stationNameStream;
-        else if (stationStringWeb.length() > 0)  nameToShow = stationStringWeb;
-        else                                     nameToShow = "Radio";
+      if (nameToShow.length() == 0) {
+        if (stationNameStream.length() > 0) nameToShow = stationNameStream;
+        else if (stationStringWeb.length() > 0) nameToShow = stationStringWeb;
+        else nameToShow = "Radio";
       }
-
-      // Przycinanie tekstu do wolnej szerokości
-      while (nameToShow.length() > 0 &&
-             u8g2.getStrWidth(nameToShow.c_str()) > maxStationWidth)
-      {
+      while (nameToShow.length() > 0 && u8g2.getStrWidth(nameToShow.c_str()) > maxStationWidth) {
         nameToShow.remove(nameToShow.length() - 1);
       }
-
       u8g2.setCursor(xStation, 11);
       u8g2.print(nameToShow);
     }
   }
 
-  // Ikonka głośnika + wartość głośności po prawej
+  // Kodek audio przed ikoną głośnika
   uint8_t iconY = 2;
   uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
+  
+  if (streamCodec.length() > 0) {
+    u8g2.setFont(u8g2_font_5x8_mr);
+    uint8_t codecWidth = u8g2.getStrWidth(streamCodec.c_str());
+    u8g2.setCursor(iconX - codecWidth - 3, 10);
+    u8g2.print(streamCodec);
+  }
 
   // „kolumna" głośnika
   u8g2.drawBox(iconX, iconY + 2, 4, 7);
@@ -1206,35 +1079,35 @@ void vuMeterMode6() // Tryb 6: 16 słupków z cienkich „kreseczek" + peak, pe�
 
     uint8_t timeWidth = u8g2.getStrWidth(timeString);
     uint8_t xStation  = 4 + timeWidth + 6;
-
-    uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
+    uint8_t iconX = 256 - 40;
     uint8_t maxStationWidth = 0;
     if (iconX > xStation + 4) maxStationWidth = iconX - xStation - 4;
 
-    if (maxStationWidth > 0)
-    {
+    if (maxStationWidth > 0) {
       String nameToShow = stationName;
-      if (nameToShow.length() == 0)
-      {
-        if (stationNameStream.length() > 0)      nameToShow = stationNameStream;
-        else if (stationStringWeb.length() > 0)  nameToShow = stationStringWeb;
-        else                                     nameToShow = "Radio";
+      if (nameToShow.length() == 0) {
+        if (stationNameStream.length() > 0) nameToShow = stationNameStream;
+        else if (stationStringWeb.length() > 0) nameToShow = stationStringWeb;
+        else nameToShow = "Radio";
       }
-
-      while (nameToShow.length() > 0 &&
-             u8g2.getStrWidth(nameToShow.c_str()) > maxStationWidth)
-      {
+      while (nameToShow.length() > 0 && u8g2.getStrWidth(nameToShow.c_str()) > maxStationWidth) {
         nameToShow.remove(nameToShow.length() - 1);
       }
-
       u8g2.setCursor(xStation, 11);
       u8g2.print(nameToShow);
     }
   }
 
-  // Ikonka głośnika po prawej
+  // Kodek audio przed ikoną głośnika
   uint8_t iconY = 2;
   uint8_t iconX = 256 - 40;  // SCREEN_WIDTH = 256
+  
+  if (streamCodec.length() > 0) {
+    u8g2.setFont(u8g2_font_5x8_mr);
+    uint8_t codecWidth = u8g2.getStrWidth(streamCodec.c_str());
+    u8g2.setCursor(iconX - codecWidth - 3, 10);
+    u8g2.print(streamCodec);
+  }
 
   u8g2.drawBox(iconX, iconY + 2, 4, 7);
   u8g2.drawLine(iconX + 4, iconY + 2, iconX + 7, iconY);
@@ -1640,9 +1513,17 @@ void vuMeterMode10() // Styl 10: Floating Peaks - szczytowe ulatują w górę (b
     }
   }
 
-  // Ikona głośnika
+  // Kodek audio przed ikoną głośnika
   uint8_t iconY = 2;
   uint8_t iconX = 256 - 40;
+  
+  if (streamCodec.length() > 0) {
+    u8g2.setFont(u8g2_font_5x8_mr);
+    uint8_t codecWidth = u8g2.getStrWidth(streamCodec.c_str());
+    u8g2.setCursor(iconX - codecWidth - 3, 10);
+    u8g2.print(streamCodec);
+  }
+
   u8g2.drawBox(iconX, iconY + 2, 4, 7);
   u8g2.drawLine(iconX + 4, iconY + 2, iconX + 7, iconY);
   u8g2.drawLine(iconX + 4, iconY + 8, iconX + 7, iconY + 10);
@@ -1657,8 +1538,11 @@ void vuMeterMode10() // Styl 10: Floating Peaks - szczytowe ulatują w górę (b
   }
   u8g2.setFont(u8g2_font_5x8_mr);
   u8g2.setCursor(iconX + 14, 10);
-  if (volumeMute) u8g2.print("MUTED");
-  else u8g2.print(volumeValue);
+  if (volumeMute) {
+    u8g2.print("MUTED");
+  } else {
+    u8g2.print(volumeValue);
+  }
   u8g2.drawHLine(0, 13, 256);
 
   // Obszar słupków
@@ -1819,23 +1703,24 @@ uint8_t analyzerGetAvailableStylesMode() {
 
 void analyzerPresetClassic() {
   Serial.printf("DEBUG: Setting Classic preset - peakHoldTimeMs = 40\n");
-  g_cfg.peakHoldTimeMs = 40;  // 5x szybciej
-  g_cfg.s5_barWidth = 8;
-  g_cfg.s5_barGap = 2;
+  g_cfg.peakHoldTimeMs = 40;
+  g_cfg.s5_barWidth = 14;
+  g_cfg.s5_barGap = 3;
   g_cfg.s5_segments = 32;
-  g_cfg.s5_fill = 0.7f;
+  g_cfg.s5_fill = 0.60f;
   g_cfg.s5_showPeaks = true;
-  g_cfg.s5_smoothness = 50;  // Średnie wygładzanie
-  g_cfg.s5_barBrightness = 220;  // Lekko ściemnione słupki
-  g_cfg.s5_peakBrightness = 255; // Pełna jasność szczytów
+  g_cfg.s5_smoothness = 50;
+  g_cfg.s5_barBrightness = 255;
+  g_cfg.s5_peakBrightness = 255;
   
+  g_cfg.s6_width = 14;
   g_cfg.s6_gap = 1;
-  g_cfg.s6_fill = 0.6f;
-  g_cfg.s6_segMax = 40;
+  g_cfg.s6_fill = 0.60f;
+  g_cfg.s6_segMax = 48;
   g_cfg.s6_showPeaks = true;
-  g_cfg.s6_smoothness = 40;  // Średnie wygładzanie
-  g_cfg.s6_barBrightness = 220;  // Lekko ściemnione słupki
-  g_cfg.s6_peakBrightness = 255; // Pełna jasność szczytów
+  g_cfg.s6_smoothness = 40;
+  g_cfg.s6_barBrightness = 255;
+  g_cfg.s6_peakBrightness = 255;
   
   g_cfg.s7_circleRadius = 3;
   g_cfg.s7_circleGap = 2;
@@ -1975,39 +1860,43 @@ void analyzerPresetRetro() {
 }
 
 void analyzerPresetFloatingPeaks() {
-  Serial.printf("DEBUG: Setting Floating Peaks preset - peakHoldTimeMs = 25\n");
-  g_cfg.peakHoldTimeMs = 25;  // 8x szybciej dla animacji
+  Serial.printf("DEBUG: Setting Floating Peaks preset - peakHoldTimeMs = 40\n");
+  g_cfg.peakHoldTimeMs = 40;
   
   // Optymalizacje dla wszystkich stylów
-  g_cfg.s5_barWidth = 10;
+  g_cfg.s5_barWidth = 14;
   g_cfg.s5_barGap = 3;
-  g_cfg.s5_segments = 30;
-  g_cfg.s5_fill = 0.6f;
+  g_cfg.s5_segments = 32;
+  g_cfg.s5_fill = 0.60f;
   g_cfg.s5_showPeaks = true;
-  g_cfg.s5_smoothness = 35; // Szybkie wygładzanie
-  g_cfg.s5_barBrightness = 180; // Ściemnione słupki
-  g_cfg.s5_peakBrightness = 255; // Rozjaśnione szczyty
+  g_cfg.s5_smoothness = 50;
+  g_cfg.s5_barBrightness = 255;
+  g_cfg.s5_peakBrightness = 255;
   
-  g_cfg.s6_gap = 2;
-  g_cfg.s6_fill = 0.65f;
-  g_cfg.s6_segMax = 35;
+  g_cfg.s6_width = 14;
+  g_cfg.s6_gap = 1;
+  g_cfg.s6_fill = 0.60f;
+  g_cfg.s6_segMax = 48;
   g_cfg.s6_showPeaks = true;
-  g_cfg.s6_smoothness = 30;
-  g_cfg.s6_barBrightness = 180;
+  g_cfg.s6_smoothness = 40;
+  g_cfg.s6_barBrightness = 255;
   g_cfg.s6_peakBrightness = 255;
   
   // Styl 10 - Floating Peaks - główne ustawienia
   g_cfg.s10_barWidth = 12;
   g_cfg.s10_barGap = 2;
-  g_cfg.s10_peakHoldTime = 8; // Czas zatrzymania (krótki)
-  g_cfg.s10_peakFloatSpeed = 8; // Prędkość ulatywania
-  g_cfg.s10_peakFadeSteps = 12; // Kroki zanikania
-  g_cfg.s10_trailLength = 6; // Długość śladu
+  g_cfg.s10_segmentHeight = 2;
+  g_cfg.s10_segmentGap = 1;
+  g_cfg.s10_maxPeaks = 1;
+  g_cfg.s10_peakHoldTime = 8;
+  g_cfg.s10_peakFloatSpeed = 8;
+  g_cfg.s10_peakFadeSteps = 12;
+  g_cfg.s10_trailLength = 6;
   g_cfg.s10_showTrails = true;
-  g_cfg.s10_smoothness = 30; // Szybkie wygładzanie
-  g_cfg.s10_barBrightness = 180; // Ściemnione słupki
-  g_cfg.s10_peakBrightness = 255; // Rozjaśnione szczyty
-  g_cfg.s10_trailBrightness = 190; // Widoczny ślad ale nie przesłaniający
+  g_cfg.s10_smoothness = 45;
+  g_cfg.s10_barBrightness = 200;
+  g_cfg.s10_peakBrightness = 255;
+  g_cfg.s10_trailBrightness = 180;
   g_cfg.s10_peakMinHeight = 3;
   g_cfg.s10_floatHeight = 15;
   g_cfg.s10_enableAnimation = true;

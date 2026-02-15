@@ -32,8 +32,8 @@ struct AnalyzerStyleCfg {
   uint16_t peakHoldTimeMs = 40;                          // Czas zatrzymania peak na szczycie (ms) 50-2000 - 5x szybciej
   
   // ---- Styl 5 - Słupkowy ----
-  uint8_t s5_barWidth = 10;     // szerokość słupka (px) 4-16
-  uint8_t s5_barGap   = 6;      // przerwa między słupkami (px) 1-8
+  uint8_t s5_barWidth = 14;     // szerokość słupka (px) 4-16
+  uint8_t s5_barGap   = 3;      // przerwa między słupkami (px) 1-8
   uint8_t s5_segments = 32;     // ilość segmentów w pionie 16-64
   uint8_t s5_segHeight = 2;     // wysokość segmentu (px) 1-4
   float   s5_fill     = 0.60f;  // wypełnienie segmentu (0.1..1.0)
@@ -45,7 +45,7 @@ struct AnalyzerStyleCfg {
   uint8_t s5_peakBrightness = 255; // jasność peak kreski 0-255
 
   // ---- Styl 6 - Segmentowy ----
-  uint8_t s6_width  = 10;       // szerokość słupka (px) 4-20
+  uint8_t s6_width  = 14;       // szerokość słupka (px) 4-20
   uint8_t s6_gap    = 1;        // przerwa między kolumnami (px) 0-4
   uint8_t s6_shrink = 1;        // ile px odjąć z szerokości 0-3
   float   s6_fill   = 0.60f;    // wypełnienie segmentu (0.1..1.0)
@@ -85,7 +85,7 @@ struct AnalyzerStyleCfg {
   uint8_t s10_barGap = 2;           // przerwa między słupkami (px) 1-6  
   uint8_t s10_segmentHeight = 2;    // wysokość segmentu (px) 1-4
   uint8_t s10_segmentGap = 1;       // przerwa między segmentami (px) 0-3
-  uint8_t s10_maxPeaks = 3;         // max ilość latających peaków na słupek 1-5
+  uint8_t s10_maxPeaks = 1;         // max ilość latających peaków na słupek 1-5
   uint8_t s10_peakHoldTime = 8;     // czas zatrzymania peak (ramki) 0-100
   uint8_t s10_peakFloatSpeed = 8;   // prędkość ulatywania (px/frame) 3-15
   uint8_t s10_peakFadeSteps = 12;   // kroki zanikania peak 5-20

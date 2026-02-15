@@ -62,11 +62,7 @@ public:
         STYLE_5 = 5,  // Minimalistyczny
         STYLE_6 = 6,  // Album art simulation
         STYLE_7 = 7,  // Analizator retro z trójkątnymi słupkami
-        STYLE_10 = 10, // Pełny ekran z animacją
-        STYLE_11 = 11, // Styl bazujący na Radio Mode 0 - podstawowy
-        STYLE_12 = 12, // Styl bazujący na Radio Mode 1 - duży zegar
-        STYLE_13 = 13, // Styl bazujący na Radio Mode 2 - 3 linijki tekstu
-        STYLE_14 = 14  // Styl bazujący na Radio Mode 3 - linia statusu
+        STYLE_10 = 10 // Pełny ekran z animacją
     };
     
     void setStyle(DisplayStyle style);
@@ -80,8 +76,6 @@ public:
     };
     
     void nextInfoStyle();  // Przełączanie przyciskiem SRC
-    void setSelectedIndex(int index);  // Ustawia _selectedIndex (synchronizacja z WebUI)
-    int getSelectedIndex() { return _selectedIndex; }  // Zwraca aktualny indeks
     
 private:
     U8G2& _display;
@@ -146,10 +140,6 @@ private:
     void renderStyle6();  // Album art
     void renderStyle7();  // Analizator retro
     void renderStyle10(); // Full screen animated
-    void renderStyle11(); // Radio Mode 0 - podstawowy
-    void renderStyle12(); // Radio Mode 1 - duży zegar
-    void renderStyle13(); // Radio Mode 2 - 3 linijki
-    void renderStyle14(); // Radio Mode 3 - linia statusu
     
     // Pomocnicze
     void drawTopBar();

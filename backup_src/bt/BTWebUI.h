@@ -47,17 +47,6 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
   </div>
 
   <div class="card">
-    <div><b>⚡ Komunikacja UART</b></div>
-    <div class="hint" style="margin-bottom:12px">
-      <input type="checkbox" id="uartEnable" onchange="toggleUart(this.checked)" autocomplete="off"/>
-      <label for="uartEnable">Włącz komunikację UART z modułem BT (RX19/TX20)</label>
-    </div>
-    <div class="hint" style="color:#e53935;font-size:11px">
-      Zaznacz aby wysyłać komendy do modułu BT. Odznacz gdy moduł jest odłączony.
-    </div>
-  </div>
-
-  <div class="card">
     <div><b>Mode Selection</b></div>
     <div class="row">
       <button class="green" onclick="setMode('OFF')">OFF</button>
@@ -126,7 +115,6 @@ static const char BTUART_HTML[] PROGMEM = R"HTML(
 
 <script>
 let terminalActive = false;
-let uartActive = false;
 
 function post(url){ fetch(url,{method:'POST'}).then(()=>refresh()); }
 
@@ -177,20 +165,6 @@ function setVol(){
 }
 
 function setBoost(b){ fetch('/bt/api/boost?b='+encodeURIComponent(b),{method:'POST'}).then(()=>refresh()); }
-
-function toggleUart(enabled){
-  uartActive = enabled;
-  console.log('BT UART:', enabled ? 'ENABLING' : 'DISABLING');
-  fetch('/bt/api/uart?enable='+(enabled?'1':'0'),{method:'POST'}).then(r=>{
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    return r.text();
-  }).then(()=>{
-    console.log('BT UART:', enabled ? 'ENABLED' : 'DISABLED');
-  }).catch(e=>{
-    console.error('UART toggle error:', e);
-    alert('Błąd przełączania UART: ' + e.message);
-  });
-}
 
 function toggleTerminal(enabled){
   terminalActive = enabled;
@@ -247,12 +221,6 @@ function refresh(){
     }
     
     document.getElementById('volInput').value=s.vol;
-    
-    // Synchronizuj stan checkboxa UART
-    if(s.uartEnabled !== undefined){
-      uartActive = s.uartEnabled;
-      document.getElementById('uartEnable').checked = s.uartEnabled;
-    }
     
     // Synchronizuj stan checkboxa terminalu
     if(s.terminalEnabled !== undefined){
@@ -350,7 +318,6 @@ private:
     
     // Stan BT
     bool _btOn;
-    bool _uartEnabled;  // Czy wysyłać komendy przez UART (checkbox w UI)
     String _mode; // "OFF", "RX", "TX", "AUTO"
     int _volume;
     int _boost;
@@ -402,7 +369,6 @@ private:
     void handleCmd(AsyncWebServerRequest *request);
     void handleBack(AsyncWebServerRequest *request);
     void handleTerminalEnable(AsyncWebServerRequest *request);
-    void handleUartEnable(AsyncWebServerRequest *request);
     void handleDevices(AsyncWebServerRequest *request);
     void handleConnect(AsyncWebServerRequest *request);
     void handleDiag(AsyncWebServerRequest *request);

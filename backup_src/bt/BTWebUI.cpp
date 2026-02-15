@@ -5,7 +5,6 @@ BTWebUI::BTWebUI()
       _btSerial(nullptr),
       _exitCallback(nullptr),
       _btOn(false),
-      _uartEnabled(false),  // Domyślnie wyłączone - włącz checkboxem
       _mode("OFF"),
       _volume(15),
       _boost(100),
@@ -109,11 +108,6 @@ void BTWebUI::begin(AsyncWebServer* server, int rxPin, int txPin, uint32_t baud)
     _server->on("/bt/api/terminal", HTTP_POST, [this](AsyncWebServerRequest *request){
         Serial.println("BTWebUI: /bt/api/terminal requested");
         this->handleTerminalEnable(request);
-    });
-    
-    _server->on("/bt/api/uart", HTTP_POST, [this](AsyncWebServerRequest *request){
-        Serial.println("BTWebUI: /bt/api/uart requested");
-        this->handleUartEnable(request);
     });
     
     // Testowy endpoint diagnostyczny
@@ -225,15 +219,6 @@ void BTWebUI::sendCommand(const String& cmd) {
         Serial.println("BT CMD ERROR: Serial not initialized!");
         if (_terminalEnabled) {
             addToLog("[ERROR] UART nie zainicjalizowany!");
-        }
-        return;
-    }
-    
-    // Sprawdź czy UART jest włączony (checkbox)
-    if (!_uartEnabled) {
-        Serial.println("BT CMD BLOCKED: UART disabled (checkbox off)");
-        if (_terminalEnabled) {
-            addToLog("[BLOCKED] UART wyłączony - zaznacz checkbox!");
         }
         return;
     }
@@ -510,7 +495,6 @@ void BTWebUI::handleState(AsyncWebServerRequest *request) {
     DynamicJsonDocument doc(512);
     
     doc["btOn"] = _btOn;
-    doc["uartEnabled"] = _uartEnabled;  // Czy UART włączony (checkbox)
     doc["mode"] = _mode;
     doc["vol"] = _volume;
     doc["boost"] = _boost;
@@ -715,25 +699,6 @@ void BTWebUI::handleTerminalEnable(AsyncWebServerRequest *request) {
             _consoleLog.clear();
             _consoleLog = "";
             Serial.println("BT Terminal: DISABLED");
-        }
-    }
-    request->send(200, "text/plain", "OK");
-}
-
-void BTWebUI::handleUartEnable(AsyncWebServerRequest *request) {
-    if (request->hasParam("enable")) {
-        int enable = request->getParam("enable")->value().toInt();
-        _uartEnabled = (enable != 0);
-        
-        Serial.println("[BT UART] ===== UART Enable changed =====");
-        Serial.println("[BT UART] New state: " + String(_uartEnabled ? "ENABLED" : "DISABLED"));
-        
-        if (_terminalEnabled) {
-            if (_uartEnabled) {
-                addToLog("[UART] Komunikacja UART włączona - komendy będą wysyłane");
-            } else {
-                addToLog("[UART] Komunikacja UART wyłączona - komendy zablokowane");
-            }
         }
     }
     request->send(200, "text/plain", "OK");

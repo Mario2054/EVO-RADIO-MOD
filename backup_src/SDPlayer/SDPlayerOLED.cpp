@@ -11,13 +11,6 @@ extern bool sdPlayerOLEDActive;
 extern void displayRadio();
 extern U8G2 u8g2;
 
-// Extern czcionki i zmienne audio z main.cpp
-extern uint8_t spleen6x12PL[];
-extern String streamCodec;
-extern String bitrateString;
-extern uint32_t SampleRate;
-extern uint8_t SampleRateRest;
-
 SDPlayerOLED::SDPlayerOLED(U8G2& display) 
     : _display(display),
       _player(nullptr),
@@ -53,41 +46,13 @@ void SDPlayerOLED::begin(SDPlayerWebUI* player) {
 
 void SDPlayerOLED::activate() {
     _active = true;
-    
-    // KRYTYCZNE: Pełny reset stanu przy aktywacji
-    _mode = MODE_SPLASH;
-    _splashStartTime = millis();
-    _selectedIndex = 0;
-    _scrollOffset = 0;
-    _scrollPosition = 0;
-    _animFrame = 0;
-    _scrollTextOffset = 0;
-    
-    // Reset liczników kliknięć
-    _srcClickCount = 0;
-    _encoderClickCount = 0;
-    _lastEncoderClickTime = 0;
-    _encoderButtonPressed = false;
-    
-    // Odśwież listę plików
-    refreshFileList();
-    
-    Serial.println("SD Player: Activated with full state reset");
+    showSplash();
 }
 
 void SDPlayerOLED::deactivate() {
     _active = false;
-    
-    // Reset stanu przy deaktywacji
-    _mode = MODE_NORMAL;
-    _selectedIndex = 0;
-    _scrollOffset = 0;
-    _scrollPosition = 0;
-    
     _display.clearBuffer();
     _display.sendBuffer();
-    
-    Serial.println("SD Player: Deactivated with state reset");
 }
 
 void SDPlayerOLED::showSplash() {
@@ -100,9 +65,8 @@ void SDPlayerOLED::loop() {
     
     unsigned long now = millis();
     
-    // Synchronizuj _selectedIndex z SDPlayerWebUI TYLKO gdy gramy (dla auto-play)
-    // NIE podczas ręcznej nawigacji - inaczej pilot nie działa!
-    if (_player && _mode == MODE_NORMAL && _player->isPlaying()) {
+    // Synchronizuj _selectedIndex z SDPlayerWebUI (dla auto-play)
+    if (_player && _mode == MODE_NORMAL) {
         int webIndex = _player->getSelectedIndex();
         if (webIndex != _selectedIndex && webIndex >= 0 && webIndex < _fileList.size()) {
             _selectedIndex = webIndex;
@@ -132,8 +96,8 @@ void SDPlayerOLED::loop() {
         }
     }
     
-    // Odświeżanie ekranu co 100ms (zmniejszenie częstotliwości dla stabilności)
-    if (now - _lastUpdate > 100) {
+    // Odświeżanie ekranu co 50ms
+    if (now - _lastUpdate > 50) {
         _lastUpdate = now;
         _animFrame++;
         render();
@@ -208,10 +172,6 @@ void SDPlayerOLED::render() {
                 case STYLE_6: renderStyle6(); break;
                 case STYLE_7: renderStyle7(); break;
                 case STYLE_10: renderStyle10(); break;
-                case STYLE_11: renderStyle11(); break;
-                case STYLE_12: renderStyle12(); break;
-                case STYLE_13: renderStyle13(); break;
-                case STYLE_14: renderStyle14(); break;
             }
             // Ikonki kontroli wyłączone - teraz wbudowane w Style 1
             // drawControlIcons();
@@ -259,9 +219,6 @@ void SDPlayerOLED::renderStyle1() {
     // STYL 1: PODSTAWOWY - Tytuł utworu + Lista plików + Format/Volume
     
     if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
     
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None" || currentFile.length() == 0) {
@@ -568,9 +525,6 @@ void SDPlayerOLED::renderStyle2() {
     
     if (!_player) return;
     
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None" || currentFile.length() == 0) {
         currentFile = "Zatrzymany";
@@ -687,9 +641,6 @@ void SDPlayerOLED::renderStyle3() {
     // Poniżej: spektrum częstotliwości z animacją
     
     if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
     
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None") currentFile = "---";
@@ -822,9 +773,6 @@ void SDPlayerOLED::renderStyle4() {
     
     if (!_player) return;
     
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None" || currentFile.length() == 0) {
         currentFile = "Zatrzymany";
@@ -942,14 +890,11 @@ void SDPlayerOLED::renderStyle4() {
 
 void SDPlayerOLED::renderStyle5() {
     // STYL 5: MINIMALISTYCZNY
-    // Tytuł scrollowany na środku + prosty pasek volume
+    // Tytuł scrollowany + prosty pasek volume
     
     if (!_player) return;
     
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem - blokuje przebijanie się radia
-    _display.clearBuffer();
-    
-    // === TYTUŁ SCROLLOWANY NA ŚRODKU ===
+    // === TYTUŁ SCROLLOWANY ===
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None" || currentFile.length() == 0) {
         currentFile = "---";
@@ -964,18 +909,18 @@ void SDPlayerOLED::renderStyle5() {
     int titleWidth = _display.getStrWidth(currentFile.c_str());
     
     if (titleWidth > 240) {
-        static int scrollOffset5 = 0;
-        static unsigned long lastScrollTime5 = 0;
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
         
-        if (millis() - lastScrollTime5 > 120) {
-            scrollOffset5++;
-            if (scrollOffset5 > titleWidth + 30) scrollOffset5 = 0;
-            lastScrollTime5 = millis();
+        if (millis() - lastScrollTime > 120) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
         }
         
         _display.setClipWindow(8, 0, 248, 35);
-        _display.drawStr(8 - scrollOffset5, 30, currentFile.c_str());
-        _display.drawStr(8 - scrollOffset5 + titleWidth + 30, 30, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset, 30, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 30, currentFile.c_str());
         _display.setMaxClipWindow();
     } else {
         int centerX = (256 - titleWidth) / 2;
@@ -1022,16 +967,13 @@ void SDPlayerOLED::renderStyle5() {
 
 void SDPlayerOLED::renderStyle6() {
     // STYL 6: INFO AUDIO + PROGRESS BAR
-    // Tytuł scrollowany na środku + informacje o pliku audio z paskiem postępu
+    // Szczegółowe informacje o pliku audio z paskiem postępu
     
     if (!_player) return;
     
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem - blokuje przebijanie się radia
-    _display.clearBuffer();
-    
     _display.setFont(u8g2_font_6x10_tr);
     
-    // === TYTUŁ SCROLLOWANY NA ŚRODKU ===
+    // === TYTUŁ SCROLLOWANY ===
     String currentFile = _player->getCurrentFile();
     if (currentFile == "None" || currentFile.length() == 0) {
         currentFile = "Brak utworu";
@@ -1045,18 +987,18 @@ void SDPlayerOLED::renderStyle6() {
     int titleWidth = _display.getStrWidth(currentFile.c_str());
     
     if (titleWidth > 240) {
-        static int scrollOffset6 = 0;
-        static unsigned long lastScrollTime6 = 0;
+        static int scrollOffset = 0;
+        static unsigned long lastScrollTime = 0;
         
-        if (millis() - lastScrollTime6 > 100) {
-            scrollOffset6++;
-            if (scrollOffset6 > titleWidth + 30) scrollOffset6 = 0;
-            lastScrollTime6 = millis();
+        if (millis() - lastScrollTime > 100) {
+            scrollOffset++;
+            if (scrollOffset > titleWidth + 30) scrollOffset = 0;
+            lastScrollTime = millis();
         }
         
         _display.setClipWindow(8, 0, 248, 14);
-        _display.drawStr(8 - scrollOffset6, 11, currentFile.c_str());
-        _display.drawStr(8 - scrollOffset6 + titleWidth + 30, 11, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset, 11, currentFile.c_str());
+        _display.drawStr(8 - scrollOffset + titleWidth + 30, 11, currentFile.c_str());
         _display.setMaxClipWindow();
     } else {
         int centerX = (256 - titleWidth) / 2;
@@ -1070,8 +1012,20 @@ void SDPlayerOLED::renderStyle6() {
     
     // Lewa kolumna
     _display.drawStr(4, 24, "Format:");
-    // USUNIĘTO getCurrentFile() - nie pobieramy nazwy pliku, tylko wyświetlamy stałą wartość
-    _display.drawStr(42, 24, "MP3");
+    String audioFormat = "";
+    String fullFileName = _player->getCurrentFile();
+    if (fullFileName.length() > 0 && fullFileName != "None") {
+        int dotPos = fullFileName.lastIndexOf('.');
+        if (dotPos > 0) {
+            audioFormat = fullFileName.substring(dotPos + 1);
+            audioFormat.toUpperCase();
+        }
+    }
+    if (audioFormat.length() > 0) {
+        _display.drawStr(42, 24, audioFormat.c_str());
+    } else {
+        _display.drawStr(42, 24, "---");
+    }
     
     _display.drawStr(4, 34, "Bitrate:");
     _display.drawStr(42, 34, "192k");  // Można dodać rzeczywiste dane z audio
@@ -1153,9 +1107,6 @@ void SDPlayerOLED::renderStyle7() {
     // Analizator FFT z trójkątnymi słupkami (podstawa szersza, im wyżej tym węższe)
     
     if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
     
     _display.setFont(u8g2_font_6x10_tr);
     
@@ -1273,9 +1224,6 @@ void SDPlayerOLED::renderStyle7() {
 void SDPlayerOLED::renderStyle10() {
     // === STYL 10 - Floating Peaks (Ulatujące szczyty) - FFT Analyzer ===
     
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem - blokuje przebijanie się radia
-    _display.clearBuffer();
-    
     // Pobierz poziomy FFT z analizatora
     float fftLevels[16];
     float fftPeaks[16];
@@ -1313,42 +1261,24 @@ void SDPlayerOLED::renderStyle10() {
         }
     }
     
-    // === GÓRNY PASEK: Tytuł scrollowany na środku + Volume ===
+    // === GÓRNY PASEK: Tytuł utworu + Volume ===
     _display.setFont(u8g2_font_6x10_tr);
     
-    // === TYTUŁ SCROLLOWANY NA ŚRODKU ===
     String currentFile = _player->getCurrentFile();
-    if (currentFile == "None" || currentFile.length() == 0) {
-        currentFile = "NO FILE";
-    } else {
-        int dotPos = currentFile.lastIndexOf('.');
-        if (dotPos > 0) currentFile = currentFile.substring(0, dotPos);
-        int slashPos = currentFile.lastIndexOf('/');
-        if (slashPos >= 0) currentFile = currentFile.substring(slashPos + 1);
+    if (currentFile == "None") currentFile = "NO FILE";
+    
+    // Usuń rozszerzenie
+    int dotPos = currentFile.lastIndexOf('.');
+    if (dotPos > 0) {
+        currentFile = currentFile.substring(0, dotPos);
     }
     
-    int titleWidth = _display.getStrWidth(currentFile.c_str());
-    
-    if (titleWidth > 200) {
-        // Scrollowanie dla długiego tytułu
-        static int scrollOffset10 = 0;
-        static unsigned long lastScrollTime10 = 0;
-        
-        if (millis() - lastScrollTime10 > 100) {
-            scrollOffset10++;
-            if (scrollOffset10 > titleWidth + 30) scrollOffset10 = 0;
-            lastScrollTime10 = millis();
-        }
-        
-        _display.setClipWindow(4, 0, 200, 13);
-        _display.drawStr(4 - scrollOffset10, 10, currentFile.c_str());
-        _display.drawStr(4 - scrollOffset10 + titleWidth + 30, 10, currentFile.c_str());
-        _display.setMaxClipWindow();
-    } else {
-        // Wyśrodkowanie krótkiego tytułu
-        int centerX = (200 - titleWidth) / 2;
-        _display.drawStr(centerX, 10, currentFile.c_str());
+    // Skróć jeśli za długi
+    if (currentFile.length() > 35) {
+        currentFile = currentFile.substring(0, 32) + "...";
     }
+    
+    _display.drawStr(4, 10, currentFile.c_str());
     
     // Volume po prawej
     int vol = _player->getVolume();
@@ -1476,42 +1406,31 @@ void SDPlayerOLED::renderStyle10() {
 // ===== KONTROLA PILOTA =====
 
 void SDPlayerOLED::onRemoteUp() {
-    // Nawigacja działa zawsze (nie tylko w MODE_NORMAL)
-    // aby po zatrzymaniu utworu można było przesuwać kursor
-    if (_mode != MODE_SPLASH) {
+    if (_mode == MODE_NORMAL) {
         scrollUp();
         showActionMessage("UP");
     }
 }
 
 void SDPlayerOLED::onRemoteDown() {
-    // Nawigacja działa zawsze (nie tylko w MODE_NORMAL)
-    // aby po zatrzymaniu utworu można było przesuwać kursor
-    if (_mode != MODE_SPLASH) {
+    if (_mode == MODE_NORMAL) {
         scrollDown();
         showActionMessage("DOWN");
     }
 }
 
 void SDPlayerOLED::onRemoteOK() {
-    // Ignoruj w trybie splash
-    if (_mode == MODE_SPLASH) return;
-    
     // Jeśli coś jest odtwarzane lub w pauzie, OK działa jako Play/Pause
     if (_player && _player->isPlaying()) {
         bool wasPaused = _player->isPaused();
         _player->pause();  // Toggle play/pause
         showActionMessage(wasPaused ? "PLAY" : "PAUSE");
         Serial.println("SD Player: OK button - Toggle Play/Pause");
-    } else {
-        // KRYTYCZNE: Jeśli nic nie gra - ZAWSZE pozwól wybrać utwór
-        // niezależnie od trybu (MODE_VOLUME, MODE_NORMAL, itp.)
-        if (_mode == MODE_VOLUME) {
-            _mode = MODE_NORMAL;  // Wyjdź z trybu volume
-        }
+    } else if (_mode == MODE_VOLUME) {
+        _mode = MODE_NORMAL;
+    } else if (_mode == MODE_NORMAL) {
         selectCurrent();
         showActionMessage("PLAY");
-        Serial.println("SD Player: OK button - Select and play track");
     }
 }
 
@@ -1641,13 +1560,6 @@ void SDPlayerOLED::nextInfoStyle() {
                   _infoStyle == INFO_CLOCK_DATE ? "CLOCK/DATE" : "TRACK TITLE");
 }
 
-void SDPlayerOLED::setSelectedIndex(int index) {
-    if (index >= 0 && index < _fileList.size()) {
-        _selectedIndex = index;
-        Serial.printf("SD Player OLED: Selected index updated to %d\n", index);
-    }
-}
-
 void SDPlayerOLED::onRemoteVolUp() {
     if (!_player) return;
     int vol = _player->getVolume();
@@ -1674,11 +1586,8 @@ void SDPlayerOLED::onRemoteStop() {
     _player->stop();
     sdPlayerPlayingMusic = false;
     
-    // KRYTYCZNE: Przywróć tryb normalny aby nawigacja działała
-    _mode = MODE_NORMAL;
-    
     showActionMessage("STOP");
-    Serial.println("SD Player: STOP button - Playback stopped, mode reset to NORMAL");
+    Serial.println("SD Player: STOP button - Playback stopped");
 }
 
 // ===== KONTROLA ENKODERA =====
@@ -1783,24 +1692,12 @@ void SDPlayerOLED::onEncoderButton() {
 void SDPlayerOLED::scrollUp() {
     if (_selectedIndex > 0) {
         _selectedIndex--;
-        
-        // KRYTYCZNE: Dostosuj scrollOffset aby kursor był widoczny  
-        int visibleLines = 4;  // Liczba widocznych linii na ekranie
-        if (_selectedIndex < _scrollOffset) {
-            _scrollOffset = _selectedIndex;
-        }
     }
 }
 
 void SDPlayerOLED::scrollDown() {
     if (_selectedIndex < _fileList.size() - 1) {
         _selectedIndex++;
-        
-        // KRYTYCZNE: Dostosuj scrollOffset aby kursor był widoczny
-        int visibleLines = 4;  // Liczba widocznych linii na ekranie
-        if (_selectedIndex >= _scrollOffset + visibleLines) {
-            _scrollOffset = _selectedIndex - visibleLines + 1;
-        }
     }
 }
 
@@ -1843,454 +1740,10 @@ void SDPlayerOLED::nextStyle() {
         case STYLE_5: _style = STYLE_6; break;
         case STYLE_6: _style = STYLE_7; break;
         case STYLE_7: _style = STYLE_10; break;
-        case STYLE_10: _style = STYLE_11; break;
-        case STYLE_11: _style = STYLE_12; break;
-        case STYLE_12: _style = STYLE_13; break;
-        case STYLE_13: _style = STYLE_14; break;
-        case STYLE_14: _style = STYLE_1; break;  // Wraca do początku
+        case STYLE_10: _style = STYLE_1; break;
     }
 }
 
 void SDPlayerOLED::setStyle(DisplayStyle style) {
     _style = style;
-}
-// ========== STYLE 11 - Bazujący na Radio Mode 0 (podstawowy) ==========
-void SDPlayerOLED::renderStyle11() {
-    // STYL 11: RADIO MODE 0 - dokładnie jak tryb 0 radyjka z DUŻĄ CZCIONKĄ i scrolling nazwą
-    if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
-    // Nazwa aktualnego pliku (bez rozszerzenia) - DUŻA CZCIONKA jak w trybie 0
-    String currentFile = _player->getCurrentFile();
-    if (currentFile == "None") currentFile = "---";
-    
-    int dotPos = currentFile.lastIndexOf('.');
-    if (dotPos > 0) {
-        currentFile = currentFile.substring(0, dotPos);
-    }
-    
-    // GÓRNA CZĘŚĆ: Numer + duża nazwa (jak w radyjku)
-    int trackNum = _selectedIndex + 1;
-    
-    // Biały kwadrat z numerem utworu (jak w trybie 0 radyjka)
-    _display.drawRBox(1, 1, 21, 16, 4);
-    _display.setDrawColor(0);  // Czarny tekst na białym tle
-    _display.setFont(u8g2_font_spleen8x16_mr);
-    char trackStr[4];
-    snprintf(trackStr, sizeof(trackStr), "%02d", trackNum);
-    _display.setCursor(4, 14);
-    _display.print(trackStr);
-    _display.setDrawColor(1);  // Powrót do białego
-    
-    // DUŻA CZCIONKA dla nazwy pliku u góry (jak w trybie 0 radyjka) - TYLKO skrócona
-    _display.setFont(u8g2_font_helvB14_tr);
-    if (currentFile.length() <= 15) {
-        // Krótka nazwa - wyświetl całą
-        _display.drawStr(24, 16, currentFile.c_str());
-    } else {
-        // Długa nazwa - skróć do 12 znaków + "..." (jak stationNameLenghtCut w radyjku)
-        String shortName = currentFile.substring(0, 12) + "...";
-        _display.drawStr(24, 16, shortName.c_str());
-    }
-    
-    // ŚRODEK EKRANU (y=33): Scrolling pełna nazwa pliku (jak stationStringScroll w radyjku Mode 0)
-    _display.setFont(spleen6x12PL);
-    String scrollText = currentFile; // Pełna nazwa bez rozszerzenia
-    int scrollW = _display.getStrWidth(scrollText.c_str());
-    
-    // Scrolling tylko jeśli tekst szerszy niż ekran (42 znaki, jak maxStationVisibleStringScrollLength)
-    if (scrollW > 250) {
-        _scrollPosition = (_scrollPosition + 1) % (scrollW + 20);
-        int x = 0 - _scrollPosition;
-        if (x < -scrollW) x = 0;
-        
-        // Rysuj tekst wielokrotnie aby zapełnić ekran (jak w displayRadioScroller)
-        int xPos = x;
-        do {
-            _display.drawStr(xPos, 33, scrollText.c_str());
-            xPos += scrollW + 20; // Odstęp między powtórzeniami
-        } while (xPos < 256);
-    } else {
-        // Krótki tekst - wyświetl od lewej (jak w Radio Mode 0)
-        _display.drawStr(0, 33, scrollText.c_str());
-    }
-    
-    // Dolna linia separująca (jak w trybie 0)
-    _display.drawLine(0, 52, 255, 52);
-    
-    // Format audio + informacje techniczne na dole (jak w trybie 0 radyjka)
-    extern String streamCodec;
-    extern String bitrateString;
-    extern uint32_t SampleRate;
-    extern uint8_t SampleRateRest;
-    extern String bitsPerSampleString;
-    
-    // Lewa strona: parametry audio
-    String displayString = String(SampleRate) + "." + String(SampleRateRest) + "kHz " + bitsPerSampleString + "bit " + bitrateString + "kbps";
-    _display.setFont(spleen6x12PL);
-    _display.drawStr(0, 63, displayString.c_str());
-    
-    // Środek: codec
-    _display.drawStr(135, 63, streamCodec.c_str());
-    
-    // Prawa strona: Czas (jak w radyjku)
-    _display.setFont(spleen6x12PL);
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 5)) {
-        char timeStr[10];
-        bool showDots = (timeinfo.tm_sec % 2 == 0);
-        if (showDots) snprintf(timeStr, sizeof(timeStr), "%2d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-        else snprintf(timeStr, sizeof(timeStr), "%2d %02d", timeinfo.tm_hour, timeinfo.tm_min);
-        _display.drawStr(226, 63, timeStr);
-    }
-}
-
-// ========== STYLE 12 - Bazujący na Radio Mode 1 (duży zegar) ==========
-void SDPlayerOLED::renderStyle12() {
-    // STYL 12: RADIO MODE 1 - DOKŁADNIE JAK W RADYJKU z zamiennikiem WiFi na status odtwarzania
-    if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 5)) {
-        // Duży zegar (7-segmentowy) - godziny i minuty DOKŁADNIE JAK W RADYJKU
-        int xtime = 0;
-        char timeString[10];
-        bool showDots = (timeinfo.tm_sec % 2 == 0);
-        if (showDots) snprintf(timeString, sizeof(timeString), "%2d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-        else snprintf(timeString, sizeof(timeString), "%2d %02d", timeinfo.tm_hour, timeinfo.tm_min);
-        
-        _display.setFont(u8g2_font_7Segments_26x42_mn);
-        _display.drawStr(xtime+7, 45, timeString); 
-        
-        // KALENDARZ - dzień miesiąca (duża czcionka)
-        _display.setFont(u8g2_font_fub14_tf); // 14x11
-        snprintf(timeString, sizeof(timeString), "%02d", timeinfo.tm_mday);
-        _display.drawStr(203, 17, timeString);
-        
-        // Nazwa miesiąca (mała czcionka)
-        String month = "";
-        switch (timeinfo.tm_mon) {
-            case 0: month = "JAN"; break;
-            case 1: month = "FEB"; break;
-            case 2: month = "MAR"; break;
-            case 3: month = "APR"; break;
-            case 4: month = "MAY"; break;
-            case 5: month = "JUN"; break;
-            case 6: month = "JUL"; break;
-            case 7: month = "AUG"; break;
-            case 8: month = "SEP"; break;
-            case 9: month = "OCT"; break;
-            case 10: month = "NOV"; break;
-            case 11: month = "DEC"; break;
-        }
-        _display.setFont(spleen6x12PL);
-        _display.drawStr(232, 14, month.c_str());
-        
-        // Dzień tygodnia (w białym boxie)
-        String dayOfWeek = "";
-        switch (timeinfo.tm_wday) {
-            case 0: dayOfWeek = " Sunday  "; break;
-            case 1: dayOfWeek = " Monday  "; break;
-            case 2: dayOfWeek = " Tuesday "; break;
-            case 3: dayOfWeek = "Wednesday"; break;
-            case 4: dayOfWeek = "Thursday "; break;
-            case 5: dayOfWeek = " Friday  "; break;
-            case 6: dayOfWeek = "Saturday "; break;
-        }
-        
-        _display.drawRBox(198, 20, 58, 15, 3);  // Box z zaokrąglonymi rogami, biały pod dniem tygodnia
-        _display.drawLine(198, 20, 256, 20); // Linia separacyjna dzień miesiąc / dzień tygodnia
-        _display.setDrawColor(0);
-        _display.drawStr(201, 31, dayOfWeek.c_str());
-        _display.setDrawColor(1);
-        _display.drawRFrame(198, 0, 58, 35, 3); // Ramka na całości kalendarza
-        
-        // SEKUNDY W MAŁEJ CZCIONCE (jak w radyjku mode 1) - spleen6x12PL
-        snprintf(timeString, sizeof(timeString), ":%02d", timeinfo.tm_sec);
-        _display.setFont(spleen6x12PL);
-        _display.drawStr(xtime+163, 45, timeString);
-    }
-    
-    // Pozioma linia separująca (jak w trybie 1)
-    _display.drawLine(0, 50, 255, 50);
-    
-    // --- POD KALENDARZEM: 3 INFORMACJE (GŁOŚNIK+VOLUME, STATUS, FORMAT) ---
-    _display.setFont(spleen6x12PL);
-    
-    // 1. Ikonka głośnika i poziom głośności
-    _display.drawGlyph(200, 47, 0x9E); // Symbol głośniczka
-    int vol = _player->getVolume();
-    _display.drawStr(208, 47, String(vol).c_str());
-    
-    // 2. Status odtwarzania (ikony jak w CD playerze/magnetofonie)
-    if (_player->isPlaying()) {
-        if (_player->isPaused()) {
-            // Paused: dwie pionowe kreski ||
-            _display.drawStr(220, 47, "||");
-        } else {
-            // Playing: trójkąt w prawo (jak PLAY na magnetofonie)
-            _display.drawStr(220, 47, ">");
-        }
-    } else {
-        // Stopped: kwadrat (jak STOP na magnetofonie)
-        _display.drawStr(220, 47, "[]");
-    }
-    
-    // 3. Format/system pliku (MP3, FLAC, WAV, etc.)
-    String currentFile = _player->getCurrentFile();
-    String fileExt = "";
-    String fileName = currentFile;
-    
-    if (currentFile != "None") {
-        int dotPos = currentFile.lastIndexOf('.');
-        if (dotPos > 0) {
-            fileExt = currentFile.substring(dotPos + 1);
-            fileExt.toUpperCase(); // MP3, FLAC, WAV
-            if (fileExt.length() > 4) fileExt = fileExt.substring(0, 4); // Ogranicz do 4 znaków
-            fileName = currentFile.substring(0, dotPos); // Nazwa bez rozszerzenia
-        }
-    } else {
-        fileName = "Brak pliku";
-    }
-    
-    if (fileExt == "") fileExt = "---";
-    _display.drawStr(235, 47, fileExt.c_str());
-    
-    // DOLNA LINIA: Scrolling nazwa utworu (pełna szerokość - format już wyświetlony w linii 47)
-    int trackNum = _selectedIndex + 1;
-    String scrollText = String(trackNum) + ". " + fileName;
-    
-    // Scrolling nazwa utworu (pełna szerokość ekranu)
-    _display.setFont(spleen6x12PL);
-    int scrollW = _display.getStrWidth(scrollText.c_str());
-    if (scrollW > 250) { // Scrolling jeśli tekst szerszy niż ekran
-        _scrollPosition = (_scrollPosition + 1) % (scrollW + 250);
-        int x = 250 - _scrollPosition;
-        if (x < -scrollW) x = 250;
-        _display.drawStr(x, 63, scrollText.c_str());
-    } else {
-        _display.drawStr(0, 63, scrollText.c_str());
-    }
-}
-
-// ========== STYLE 13 - Bazujący na Radio Mode 2 (3 linijki tekstu) ==========
-void SDPlayerOLED::renderStyle13() {
-    // STYL 13: RADIO MODE 2 - kompaktowy 3-linijkowy układ
-    if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
-    _display.setFont(spleen6x12PL);
-    
-    // Nazwa pliku na górze z numerem
-    String currentFile = _player->getCurrentFile();
-    if (currentFile == "None") currentFile = "Brak pliku";
-    
-    int dotPos = currentFile.lastIndexOf('.');
-    if (dotPos > 0) {
-        currentFile = currentFile.substring(0, dotPos);
-    }
-    
-    // Kwadrat z numerem (jak w trybie 2 radyjka)
-    int trackNum = _selectedIndex + 1;
-    _display.drawRBox(1, 1, 18, 13, 4);
-    _display.setDrawColor(0);
-    char trackStr[4];
-    snprintf(trackStr, sizeof(trackStr), "%02d", trackNum);
-    _display.setCursor(3, 11);
-    _display.print(trackStr);
-    _display.setDrawColor(1);
-    
-    // Nazwa pliku obok numeru (skrócona aby się zmieściła)
-    if (currentFile.length() > 35) {
-        currentFile = currentFile.substring(0, 32) + "...";
-    }
-    _display.drawStr(23, 11, currentFile.c_str());
-    
-    // Status odtwarzania w środku (linijka 2)
-    const char* status = _player->isPlaying() ? (_player->isPaused() ? "PAUSED" : "PLAYING") : "STOPPED";
-    int statusW = _display.getStrWidth(status);
-    _display.drawStr((256 - statusW) / 2, 30, status);
-    
-    // Dolna linia separująca (jak w trybie 2)
-    _display.drawLine(0, 52, 255, 52);
-    
-    // Dolna linijka: codec + samplerate + bitrate (jak w trybie 2 radyjka)
-    extern String streamCodec;
-    extern String bitrateString;
-    extern uint32_t SampleRate;
-    extern uint8_t SampleRateRest;
-    
-    // Lewa strona: samplerate + bitrate
-    String displayString = String(SampleRate) + "." + String(SampleRateRest) + "kHz " + bitrateString + "kbps";
-    _display.drawStr(0, 63, displayString.c_str());
-    
-    // Środek: codec
-    _display.drawStr(135, 63, streamCodec.c_str());
-    
-    // Prawa strona: Czas
-    _display.setFont(spleen6x12PL);
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 5)) {
-        char timeStr[10];
-        snprintf(timeStr, sizeof(timeStr), "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-        _display.drawStr(226, 63, timeStr);
-    }
-}
-
-// ========== STYLE 14 - Bazujący na Radio Mode 3 (linia statusu) ==========
-void SDPlayerOLED::renderStyle14() {
-    // STYL 14: RADIO MODE 3 - linia statusu na górze, duży tytuł w środku, scrolling na dole
-    if (!_player) return;
-    
-    // KRYTYCZNE: Wyczyść bufor przed rysowaniem
-    _display.clearBuffer();
-    
-    extern String streamCodec;
-    extern String bitrateString;
-    
-    String currentFile = _player->getCurrentFile();
-    String fileName = currentFile;
-    String fileExt = "";
-    
-    if (currentFile != "None") {
-        int dotPos = currentFile.lastIndexOf('.');
-        if (dotPos > 0) {
-            fileExt = currentFile.substring(dotPos + 1);
-            fileExt.toUpperCase();
-            fileName = currentFile.substring(0, dotPos);
-        }
-    } else {
-        fileName = "Brak pliku";
-    }
-    
-    // ========== GÓRNA LINIA (y=10) - STATUS ==========
-    _display.setFont(spleen6x12PL);
-    
-    // Lewa strona: Numer utworu (jak Bank+Station w radyjku)
-    int trackNum = _selectedIndex + 1;
-    _display.setCursor(1, 10);
-    _display.print("TRACK:");
-    char trackStr[4];
-    snprintf(trackStr, sizeof(trackStr), "%02d", trackNum);
-    _display.print(trackStr);
-    
-    // Środek-lewo: Codec + Bitrate w ramce (jak w Radio Mode 3)
-    _display.setFont(u8g2_font_5x8_tr); // Mała czcionka 5x8 (podobna do mono04b03b)
-    uint8_t x_codec = 103;
-    
-    // Ramka z codec i bitrate
-    if (_display.getStrWidth(bitrateString.c_str()) > 19) {
-        _display.drawFrame(x_codec, 2, 45, 9);
-    } else {
-        _display.drawFrame(x_codec, 2, 39, 9);
-    }
-    
-    _display.drawBox(x_codec + 1, 2, 21, 9);
-    _display.setDrawColor(0);
-    _display.drawStr(x_codec + 2, 9, streamCodec.c_str());
-    _display.setDrawColor(1);
-    _display.drawStr(x_codec + 23, 9, bitrateString.c_str());
-    
-    // Ikona głośnika + wartość (jak w Radio Mode 3)
-    _display.setFont(spleen6x12PL);
-    _display.drawGlyph(180, 10, 0x9E); // Symbol głośniczka
-    int vol = _player->getVolume();
-    _display.drawStr(189, 10, String(vol).c_str());
-    
-    // Prawa górny róg: Czas
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo, 5)) {
-        char timeStr[10];
-        snprintf(timeStr, sizeof(timeStr), "%2d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-        _display.drawStr(226, 10, timeStr);
-    }
-    
-    // ========== ŚRODEK - DUŻA NAZWA UTWORU (wycentrowana) ==========
-    // Skróć nazwę jeśli za długa (max 20 znaków dla dużej czcionki)
-    String displayName = fileName;
-    if (displayName.length() > 20) {
-        displayName = displayName.substring(0, 17) + "...";
-    }
-    
-    _display.setFont(u8g2_font_UnnamedDOSFontIV_tr); // Duża czcionka jak w Radio Mode 3
-    int nameWidth = _display.getStrWidth(displayName.c_str());
-    int nameX = (256 - nameWidth) / 2; // Wycentruj
-    _display.drawStr(nameX, 27, displayName.c_str()); // y=27 wyżej niż poprzednio
-    
-    // ========== STATUS ODTWARZANIA (PO ŚRODKU) ==========
-    _display.setFont(spleen6x12PL);
-    String statusText = "";
-    if (_player->isPlaying()) {
-        if (_player->isPaused()) {
-            statusText = "PAUSED";
-        } else {
-            statusText = "PLAYING";
-        }
-    } else {
-        statusText = "STOP";
-    }
-    int statusW = _display.getStrWidth(statusText.c_str());
-    int statusX = (256 - statusW) / 2;
-    _display.drawStr(statusX, 42, statusText.c_str()); // y=42 pod nazwą
-    
-    // ========== DÓŁ - SCROLLING PEŁNA NAZWA ==========
-    _display.setFont(spleen6x12PL);
-    String scrollText = fileName + "    "; // Dodaj separatory
-    int scrollW = _display.getStrWidth(scrollText.c_str());
-    
-    // Scrolling jeśli tekst szerszy niż ekran (jak w displayRadioScroller Mode 3)
-    if (scrollW > 250) {
-        _scrollPosition = (_scrollPosition + 1) % (scrollW + 20);
-        int x = 0 - _scrollPosition;
-        if (x < -scrollW) x = 0;
-        
-        // Rysuj tekst wielokrotnie aby zapełnić ekran
-        int xPos = x;
-        do {
-            _display.drawStr(xPos, 52, scrollText.c_str()); // y=52 jak yPositionDisplayScrollerMode3
-            xPos += scrollW;
-        } while (xPos < 256);
-    } else {
-        // Krótki tekst - wyśrodkuj (jak w Radio Mode 3)
-        int x = (256 - scrollW) / 2;
-        _display.drawStr(x, 52, scrollText.c_str());
-    }
-    
-    // Linia separująca nad dolnym paskiem
-    _display.drawLine(0, 56, 255, 56);
-    
-    // ========== DOLNY PASEK (y=63) - INFORMACJE TECHNICZNE ==========
-    extern uint32_t SampleRate;
-    extern uint8_t SampleRateRest;
-    
-    // Lewa strona: Samplerate + format
-    String infoStr = String(SampleRate) + "." + String(SampleRateRest) + "kHz";
-    if (fileExt.length() > 0) {
-        infoStr += " " + fileExt;
-    }
-    _display.setFont(spleen6x12PL);
-    _display.drawStr(0, 63, infoStr.c_str());
-    
-    // Środek: Ikona statusu odtwarzania
-    if (_player->isPlaying()) {
-        if (_player->isPaused()) {
-            _display.drawStr(120, 63, "||");
-        } else {
-            _display.drawStr(120, 63, ">");
-        }
-    } else {
-        _display.drawStr(120, 63, "[]");
-    }
-    
-    // Prawa strona: Bitrate
-    String bitrateStr = bitrateString + "kbps";
-    int bitrateW = _display.getStrWidth(bitrateStr.c_str());
-    _display.drawStr(256 - bitrateW, 63, bitrateStr.c_str());
 }

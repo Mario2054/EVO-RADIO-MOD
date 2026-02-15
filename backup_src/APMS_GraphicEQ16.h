@@ -4,7 +4,31 @@
 
 class Audio;
 
-// 16-band graphic EQ (20 Hz .. 20 kHz), gains in [-6..+6] dB
+// ========================================================================
+// 16-BAND GRAPHIC EQUALIZER - ULEPSZONA KONWERSJA DO 3-PUNKTÓW
+// ========================================================================
+// UWAGA: Nowa biblioteka ESP32-audioI2S (GitHub) nie ma wbudowanego
+// 16-pasmowego equalizera. Ta implementacja używa WAŻONEJ KONWERSJI 
+// na 3-punktowy equalizer (Low/Mid/High).
+//
+// MAPOWANIE PASM (z wagami psychoakustycznymi):
+//   - Low  (pasma 0-4):   32-500 Hz   (waga: 1.2, 1.5, 1.3, 1.0, 0.8)
+//   - Mid  (pasma 5-10):  1k-6k Hz    (waga: 1.0, 1.3, 1.5, 1.3, 1.0, 0.8)
+//   - High (pasma 11-15): 8k-16k Hz   (waga: 1.0, 1.2, 1.1, 0.9, 0.8)
+//
+// ZAKRES WZMOCNIEŃ:
+//   - UI (ekran): -16 do +16 dB (16 pasm, wyświetlanie)
+//   - Presety: -12 do +12 dB (bezpieczny margines)
+//   - Audio (setTone): -40 do +6 dB (hardware limit)
+//   - Konwersja: ważona średnia -> ograniczenie do [-12..+6]
+//
+// PRESETY: 7 profesjonalnych ustawień (Flat, Bass, Vocal, Radio, 
+//          V-Shape, Rock, Jazz)
+//
+// ALGORYTM: Ważona konwersja uwzględnia krzywą psychoakustyczną -
+//           pasma 2-3kHz (wokale) mają większy wpływ niż ekstremum
+// ========================================================================
+
 namespace APMS_EQ16 {
 
 static const uint8_t BANDS = 16;

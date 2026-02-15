@@ -7,7 +7,11 @@
 //                                                                                                                     //
 // Compilator: Arduino, Platformio                                                                                     //
 // Espressif ESPcore32-s3:                      3.2.0 (works on newer but without modified libs for FLAC files)        //
-// ESP32-audioI2S-master by schreibfaul1:       3.4.3 with commits 1.12.2025                                           //
+// ESP32-audioI2S by schreibfaul1:              3.4.4 (2026-02-02)                                                     //
+//   - Źródło: https://github.com/schreibfaul1/ESP32-audioI2S.git                                                      //
+//   - Wersja: 3.4.4+sha.674c64a (zablokowana na tę wersję)                                                            //
+//   - Equalizer: Konwersja 16-pasm -> 3-punkty (Low/Mid/High) z wagami                                                //
+//   - Zobacz: INTEGRACJA_AUDIO_LIB.md i PRZEWODNIK_EQ16.md                                                            //
 // ESP Async WebServer:                         3.9.1                                                                  //
 // Async TCP:                                   3.4.9                                                                  // 
 // ezButton:                                    1.0.6                                                                  //
@@ -33,8 +37,10 @@
 #include "EQ_AnalyzerDisplay.h"  // FFT analyzer (styles 5/6)
 #include "EQ_FFTAnalyzer.h"    // FFT analyzer functions
 #include "EQ16_GraphicEQ.h"     // 16-Band Graphic Equalizer
-#include "BT_KCX_Module.h"      // KCX Bluetooth Emitter/Receiver Module
-#include "SDPlayer.h"           // Simple SD Player class
+#include "SDPlayer/SDPlayerOLED.h"   // SD Player with OLED display
+#include "SDPlayer/SDPlayerWebUI.h"  // SD Player Web Interface
+#include "bt/BTWebUI.h"             // Bluetooth Web Interface
+// #include "bt/BT_KCX_Module.h"      // KCX Bluetooth Emitter/Receiver Module (ZAŚLEPKA)
 
 // Forward declarations
 void displayEqualizer();
@@ -176,8 +182,8 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
 // definicja dlugosci ilosci stacji w banku, dlugosci nazwy stacji w PSRAM/EEPROM, maksymalnej ilosci plikow audio (odtwarzacz)
 #define MAX_STATIONS 99          // Maksymalna liczba stacji radiowych, które mogą być przechowywane w jednym banku
 #define STATION_NAME_LENGTH 220  // Nazwa stacji wraz z bankiem i numerem stacji do wyświetlenia w pierwszej linii na ekranie
-// MAX_FILES zdefiniowane w SDPlayer.h
-#define bank_nr_max 16           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
+#define MAX_FILES 100            // Maksymalna liczba plików lub katalogów w tablicy directoriesz
+#define bank_nr_max 17           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
 // Konfiguracja stylów analizatora
 uint8_t analyzerStylesMode = 2;     // 0=0-4-5, 1=0-4-6, 2=0-4-5-6-7-8-9 (wszystkie)
 uint8_t analyzerCurrentPreset = 0;  // Aktualny preset analizatora (0-4)
@@ -245,7 +251,10 @@ uint16_t rcCmdBT = 0;          // Przycisk Bluetooth menu
 
 bool  f_callInfo = 0;       // Info
 
-
+// SDPlayer global flags
+bool sdPlayerOLEDActive = false;   // Czy SDPlayer OLED jest aktywny
+bool sdPlayerPlayingMusic = false; // Czy SDPlayer odtwarza muzykę
+bool sdPlayerAutoPlayNext = false; // Flaga żądania automatycznego odtworzenia następnego utworu
 
 int currentSelection = 0;                     // Numer aktualnego wyboru na ekranie OLED
 int firstVisibleLine = 0;                     // Numer pierwszej widocznej linii na ekranie OLED
@@ -513,7 +522,54 @@ SPIClass customSPI = SPIClass(HSPI);  // Używamy HSPI, ale z własnymi pinami
 
 ezButton button2(SW_PIN2);  // Utworzenie obiektu przycisku z enkodera 2 ezButton
 Audio audio;                // Obiekt do obsługi funkcji związanych z dźwiękiem i audio
-SDPlayer sdPlayer;          // Obiekt do obsługi SD Player
+
+// SDPlayer i BTWebUI - globalne instancje
+SDPlayerWebUI* g_sdPlayerWeb = nullptr;
+SDPlayerOLED* g_sdPlayerOLED = nullptr;
+BTWebUI* g_btWebUI = nullptr;
+
+// Wrapper functions for SDPlayer
+void SDPlayerOLED_init(U8G2* display) {
+  if (!g_sdPlayerWeb) {
+    g_sdPlayerWeb = new SDPlayerWebUI();
+  }
+  if (!g_sdPlayerOLED) {
+    g_sdPlayerOLED = new SDPlayerOLED(*display);
+    g_sdPlayerOLED->begin(g_sdPlayerWeb);
+  }
+}
+
+void SDPlayerOLED_loop() {
+  if (g_sdPlayerOLED) {
+    g_sdPlayerOLED->loop();
+  }
+}
+
+void SDPlayerWebUI_registerHandlers(AsyncWebServer& server) {
+  if (g_sdPlayerWeb) {
+    g_sdPlayerWeb->begin(&server, &audio);
+  }
+}
+
+// Wrapper functions for BTWebUI
+void BTWebUI_init() {
+  if (!g_btWebUI) {
+    g_btWebUI = new BTWebUI();
+  }
+}
+
+void BTWebUI_loop() {
+  if (g_btWebUI) {
+    g_btWebUI->loop();
+  }
+}
+
+void BTWebUI_registerHandlers(AsyncWebServer& server) {
+  if (g_btWebUI) {
+    // UART pins for BT module: RX=19, TX=20, baud=115200
+    g_btWebUI->begin(&server, 19, 20, 115200);
+  }
+}
 
 Ticker timer1;             // Timer do updateTimer co 1s
 Ticker timer2;             // Timer do getWeatherData co 60s
@@ -995,12 +1051,16 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><th><b>16-Band Graphic Equalizer</b></th></tr>
   <tr><td>Enable 16-Band Graphic Equalizer, default:Off</td><td><input type="checkbox" name="eq16Enabled" value="1" %EQ16_ENABLED_checked></td></tr>
   <tr><td>EQ16 Actions</td><td>
-    <button type="button" class="button" onclick="location.href='/eq16reset'">Reset All Bands</button>
+    <button type="button" class="button" onclick="location.href='/eq16reset'">Reset All</button>
     <button type="button" class="button" onclick="location.href='/eq16preset/0'">Flat</button>
     <button type="button" class="button" onclick="location.href='/eq16preset/1'">Bass</button>
     <button type="button" class="button" onclick="location.href='/eq16preset/2'">Vocal</button>
     <button type="button" class="button" onclick="location.href='/eq16preset/3'">Presence</button>
     <button type="button" class="button" onclick="location.href='/eq16preset/4'">V-Shape</button>
+    <button type="button" class="button" onclick="location.href='/eq16preset/5'">Rock/Metal</button>
+    <button type="button" class="button" onclick="location.href='/eq16preset/6'">Jazz</button>
+    <button type="button" class="button" onclick="location.href='/eq16preset/7'">Electronic</button>
+    <button type="button" class="button" onclick="location.href='/eq16preset/8'">Custom</button>
   </td></tr>
   </table>
   <input type="submit" value="Update">
@@ -1117,13 +1177,14 @@ const char menu_html[] PROGMEM = R"rawliteral(
   <!-- <br><button class="button" onclick="location.href='/fwupdate'">OTA Update (Old)</button><br> -->
   <br><button class="button" onclick="location.href='/info'">Info</button><br>
   <br><button class="button" onclick="location.href='/ota'">OTA Update</button><br>
+  <br><button class="button" onclick="location.href='/sdplayer'">SD Player</button><br>
+  <br><button class="button" onclick="location.href='/analyzer'">Analyzer Edit</button><br>
   <br><button class="button" onclick="location.href='/adc'">ADC Keyboard Settings</button><br>
   <br><button class="button" onclick="location.href='/list'">SD / SPIFFS Explorer</button><br>
   <br><button class="button" onclick="location.href='/editor'">Memory Bank Editor</button><br>
   <br><button class="button" onclick="location.href='/browser'">Radio Browser API</button><br>
   <br><button class="button" onclick="location.href='/playurl'">Play from URL</button><br>
   <br><button class="button" onclick="location.href='/bt'">Bluetooth Settings</button><br>
-  <br><button class="button" onclick="location.href='/sdplayer'">SD Player Control</button><br>
   <br><button class="button" onclick="location.href='/config'">Settings</button><br>
   <br><p style='font-size: 0.8rem;'><a href="#" onclick="window.location.replace('/')">Go Back</a></p>
   </body></html>
@@ -1497,108 +1558,6 @@ const char bt_html[] PROGMEM = R"rawliteral(
       var vol = document.getElementById('btVolume').value;
       document.getElementById('volHidden').value = vol;
       fetch('/bt/volume?v=' + vol).then(() => location.reload());
-    }
-  </script>
-</body>
-</html>
-)rawliteral";
-
-const char sdplayer_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>SD Player Control</title>
-<style>
-body { font-family: Arial; background: #D0D0D0; text-align: center; padding: 20px; }
-h1 { color: #333; }
-.status { padding: 10px; margin: 20px auto; border-radius: 10px; width: 300px; font-weight: bold; font-size: 1.2em; }
-.connected { background: #4CAF50; color: white; }
-.disconnected { background: #f44336; color: white; }
-.playing { background: #2196F3; color: white; }
-.stopped { background: #FF9800; color: white; }
-.btn { padding: 10px 20px; margin: 5px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 1rem; }
-.btn:hover { background: #45a049; }
-.btn.active { background: #2196F3; }
-.btn.danger { background: #f44336; }
-.btn.danger:hover { background: #d32f2f; }
-.info { font-size: 1rem; margin: 10px; }
-.file-list { max-width: 600px; margin: 20px auto; text-align: left; background: white; border-radius: 10px; padding: 20px; }
-.file-item { padding: 10px; border-bottom: 1px solid #ddd; cursor: pointer; }
-.file-item:hover { background: #f5f5f5; }
-.file-item.dir { font-weight: bold; color: #2196F3; }
-.file-item.audio { color: #4CAF50; }
-.current-dir { background: #e3f2fd; padding: 10px; border-radius: 5px; margin-bottom: 10px; }
-.volume-control { margin: 20px 0; }
-.volume-slider { width: 300px; }
-</style>
-</head>
-<body>
-  <h1>SD Player Control</h1>
-  
-  <!-- Status Display -->
-  <div class="status %SD_STATUS_CLASS%">%SD_STATUS%</div>
-  <p class="info">Current Directory: <strong>%SD_CURRENT_DIR%</strong></p>
-  <p class="info">Now Playing: <strong>%SD_NOW_PLAYING%</strong></p>
-  
-  <!-- Control Buttons -->
-  <div style="margin: 20px 0;">
-    <button class="btn" onclick="sdCommand('play')">Play Selected</button>
-    <button class="btn" onclick="sdCommand('pause')">Pause</button>
-    <button class="btn" onclick="sdCommand('stop')">Stop</button>
-    <button class="btn" onclick="sdCommand('next')">Next</button>
-    <button class="btn" onclick="sdCommand('prev')">Previous</button>
-  </div>
-  
-  <!-- Directory Navigation -->
-  <div style="margin: 20px 0;">
-    <button class="btn" onclick="sdCommand('updir')">Up Directory</button>
-    <button class="btn" onclick="location.reload()">Refresh</button>
-  </div>
-  
-  <!-- File List -->
-  <div class="file-list">
-    <div class="current-dir">📁 %SD_CURRENT_DIR%</div>
-    <div id="fileList">%SD_FILE_LIST%</div>
-  </div>
-  
-  <!-- Volume Control -->
-  <div class="volume-control">
-    <label for="sdVolume">Volume: <span id="volValue">%SD_VOLUME%</span></label><br>
-    <input type="range" id="sdVolume" class="volume-slider" min="0" max="30" value="%SD_VOLUME%" onchange="setVolume(this.value)">
-  </div>
-  
-  <!-- Navigation -->
-  <p><button class="btn" onclick="location.href='/menu'">Back to Menu</button></p>
-  
-  <script>
-    function sdCommand(cmd) {
-      fetch('/api/sd/cmd?action=' + cmd)
-        .then(response => response.text())
-        .then(data => {
-          console.log('SD Command result:', data);
-          setTimeout(() => location.reload(), 500);
-        });
-    }
-    
-    function selectFile(path, isDir) {
-      if (isDir) {
-        fetch('/api/sd/cmd?action=enterdir&path=' + encodeURIComponent(path))
-          .then(() => location.reload());
-      } else {
-        fetch('/api/sd/cmd?action=playfile&path=' + encodeURIComponent(path))
-          .then(() => location.reload());
-      }
-    }
-    
-    function setVolume(vol) {
-      document.getElementById('volValue').textContent = vol;
-      fetch('/api/sd/volume?v=' + vol);
-    }
-    
-    // Auto-refresh every 5 seconds when playing
-    if ('%SD_STATUS_CLASS%' === 'playing') {
-      setTimeout(() => location.reload(), 5000);
     }
   </script>
 </body>
@@ -3225,6 +3184,11 @@ void stationStringFormatting()
 // Obsługa wyświetlacza dla odtwarzanego strumienia radia internetowego
 void displayRadio() 
 {
+  // GUARD: Nie rysuj ekranu radia gdy SDPlayer jest aktywny
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    return; // SDPlayer kontroluje wyświetlacz
+  }
+  
   int StationNameEnd = stationName.indexOf("  "); // Wycinamy nazwe stacji tylko do miejsca podwojnej spacji 
   stationName = stationName.substring(0, StationNameEnd);
 
@@ -3279,7 +3243,7 @@ void displayRadio()
     }
     
     // Ikona statusu Bluetooth
-    BT_drawStatusIcon(u8g2, 200, 63);
+    // BT_drawStatusIcon(u8g2, 200, 63);
     
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
     u8g2.drawLine(0, 52, 255, 52); // Dolna linia rozdzielajaca
@@ -3309,7 +3273,7 @@ void displayRadio()
     }
     
     // Ikona statusu Bluetooth w trybie Mode 1 (Clock)
-    BT_drawStatusIcon(u8g2, 180, 47);
+    // BT_drawStatusIcon(u8g2, 180, 47);
     
     // --- GŁOSNIKCZEK I POZIOM GŁOSOSCI ---
     u8g2.setFont(spleen6x12PL);
@@ -3365,7 +3329,7 @@ void displayRadio()
     }
     
     // Ikona statusu Bluetooth w trybie Mode 2 (3 linie)
-    BT_drawStatusIcon(u8g2, 200, 63);
+    // BT_drawStatusIcon(u8g2, 200, 63);
 
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
 
@@ -3414,7 +3378,7 @@ void displayRadio()
     }
     
     // Ikona statusu Bluetooth w trybie Mode 3 (górna belka)
-    BT_drawStatusIcon(u8g2, 230, 10);
+    // BT_drawStatusIcon(u8g2, 230, 10);
     
     u8g2.setFont(spleen6x12PL);
     if (!urlPlaying) {u8g2.drawStr(98,10, "STATION:");} else {u8g2.drawStr(98,10, "  URL   ");}
@@ -3725,7 +3689,13 @@ void my_audio_info(Audio::msg_t m)
     case Audio::evt_eof:
     {
       Serial.printf("end of file:  %s\n", m.msg);
-      if (resumePlay == true)
+      
+      // Sprawdź czy SDPlayer odtwarza muzykę - jeśli tak, ustaw flagę auto-play
+      if (sdPlayerPlayingMusic && g_sdPlayerWeb) {
+        Serial.println("[SDPlayer] Koniec utworu - żądanie automatycznego przejścia do następnego");
+        sdPlayerAutoPlayNext = true; // Ustaw flagę - obsługa w głównej pętli loop()
+      }
+      else if (resumePlay == true)
       {
         ir_code = rcCmdOk; // Przypisujemy kod pilota - OK
         bit_count = 32;
@@ -3819,6 +3789,9 @@ void encoderFunctionOrderChange()
 
 void bankMenuDisplay()
 {
+  // GUARD: Nie rysuj gdy SDPlayer aktywny
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
+  
   if (bank_nr < 1) {bank_nr = 1;}
   const uint8_t cornerRadius = 3;
   float segmentWidth = (float)212 / bank_nr_max;
@@ -4403,6 +4376,12 @@ void volumeFadeOut(uint8_t time_ms)
 
 void changeStation() 
 {
+  // ZABEZPIECZENIE: NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+  if (sdPlayerOLEDActive) {
+    Serial.println("DEBUG: changeStation() BLOCKED - SD Player is active!");
+    return;
+  }
+  
   fwupd = false;
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_fub14_tf); // cziocnka 14x11
@@ -4532,6 +4511,9 @@ void changeStation()
 // Funkcja do wyświetlania listy stacji radiowych z opcją wyboru poprzez zaznaczanie w negatywie
 void displayStations() 
 {
+  // GUARD: Nie rysuj gdy SDPlayer aktywny
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
+  
   listedStations = true;
   u8g2.clearBuffer();  // Wyczyść bufor przed rysowaniem, aby przygotować ekran do nowej zawartości
   u8g2.setFont(spleen6x12PL);
@@ -5529,6 +5511,9 @@ void displayClearUnderScroller() // Funkcja odpwoiedzialna za przewijanie inform
 
 void displayRadioScroller() // Funkcja odpwoiedzialna za przewijanie informacji strem tittle lub stringstation
 {
+  // GUARD: Nie rysuj gdy SDPlayer aktywny
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
+  
   // Jesli zmieniła sie dlugosc wyswietlanego stationString to wyczysc ekran OLED w miescach Scrollera
   if (stationStringScroll.length() != stationStringScrollLength) 
   {
@@ -5907,7 +5892,7 @@ void clearFlags()
   rcInputDigitsMenuEnable = false;
   f_voiceTimeBlocked = false;
   btMenuActive = false;
-  BT_setMenuActive(false);  // Wyłącz menu Bluetooth
+  // // BT_setMenuActive(false);  // Wyłącz menu Bluetooth
   if (f_displaySleepTime && f_sleepTimerOn) {f_displaySleepTimeSet = true;}
   f_displaySleepTime = false;
   
@@ -6200,6 +6185,8 @@ void IRAM_ATTR pulseISR()
 
 void displayEqualizer() // Funkcja rysująca menu 3-punktowego equalizera
 {
+  // GUARD: Nie rysuj gdy SDPlayer aktywny
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
 
   displayStartTime = millis();  // Uaktulniamy czas dla funkcji auto-pwrotu z menu
   equalizerMenuEnable = true;   // Ustawiamy flage menu equalizera
@@ -6581,11 +6568,14 @@ void displayDimmer(bool dimmerON)
 
       if (bankMenuEnable == true)
       {
-        bankMenuEnable = false;
-        fetchStationsFromServer();
-        changeStation();
-        displayRadio();
-        clearFlags();
+        // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+        if (!sdPlayerOLEDActive) {
+          bankMenuEnable = false;
+          fetchStationsFromServer();
+          changeStation();
+          displayRadio();
+          clearFlags();
+        }
         return;
       }
       else if (bankMenuEnable == false)
@@ -6636,12 +6626,15 @@ void displayDimmer(bool dimmerON)
 
     if (button1.isReleased() && listedStations) 
     {
-      listedStations = false;
-      volumeSet = false;
-      changeStation();
-      displayRadio();
-      //u8g2.sendBuffer();
-      clearFlags();
+      // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+      if (!sdPlayerOLEDActive) {
+        listedStations = false;
+        volumeSet = false;
+        changeStation();
+        displayRadio();
+        //u8g2.sendBuffer();
+        clearFlags();
+      }
       return;
     }
 
@@ -6653,6 +6646,81 @@ void displayDimmer(bool dimmerON)
 
 void handleEncoder2StationsVolumeClick()
 {
+  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
+  static int encoderClickCount2 = 0;
+  static unsigned long lastEncoderClickTime2 = 0;
+  
+  // Sprawdź triple-click tylko gdy SD Player nieaktywny
+  if (!sdPlayerOLEDActive) {
+    bool isPressed = (digitalRead(SW_PIN2) == LOW);
+    static bool lastPressState2 = false;
+    
+    if (isPressed && !lastPressState2) {
+      // Nowe kliknięcie
+      unsigned long now = millis();
+      if (now - lastEncoderClickTime2 < 600) { // 600ms okno jak w IR Key9
+        encoderClickCount2++;
+      } else {
+        encoderClickCount2 = 1; // Reset po timeout
+      }
+      lastEncoderClickTime2 = now;
+      
+      if (encoderClickCount2 >= 3) {
+        // Triple-click wykryty - aktywuj SD Player
+        if (g_sdPlayerOLED) {
+          g_sdPlayerOLED->activate();
+        }
+        encoderClickCount2 = 0; // Reset
+      }
+    }
+    lastPressState2 = isPressed;
+  }
+  
+  // Obsługa SDPlayer OLED
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    static unsigned long buttonPressStartTime = 0;
+    static bool wasPressed = false;
+    bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
+    
+    if (isPressed && !wasPressed) {
+      // Przycisk został właśnie wciśnięty
+      buttonPressStartTime = millis();
+      wasPressed = true;
+    } else if (!isPressed && wasPressed) {
+      // Przycisk został zwolniony
+      wasPressed = false;
+      unsigned long pressDuration = millis() - buttonPressStartTime;
+      
+      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
+      if (pressDuration < 4000) {
+        g_sdPlayerOLED->onEncoderButton();
+      }
+    } else if (isPressed && wasPressed) {
+      // Przycisk jest ciągle przytrzymany - sprawdzamy czas
+      unsigned long pressDuration = millis() - buttonPressStartTime;
+      if (pressDuration >= 4000) {
+        // Długie przytrzymanie - wyjście do radia
+        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
+        wasPressed = false; // Reset aby nie wywoływać wielokrotnie
+        return;
+      }
+    }
+    
+    // Obsługa obracania enkodera
+    CLK_state2 = digitalRead(CLK_PIN2);
+    if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH) {
+      if (digitalRead(DT_PIN2) == HIGH) {
+        g_sdPlayerOLED->onEncoderLeft();  // Lewo = Góra
+      } else {
+        g_sdPlayerOLED->onEncoderRight(); // Prawo = Dół
+      }
+    }
+    prev_CLK_state2 = CLK_state2;
+    
+    return; // Wyjdź z funkcji - SDPlayer obsłużony
+  }
+  
   CLK_state2 = digitalRead(CLK_PIN2);                       // Odczytanie aktualnego stanu pinu CLK enkodera 2
   if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH)  // Sprawdzenie, czy stan CLK zmienił się na wysoki
   {
@@ -6665,13 +6733,13 @@ void handleEncoder2StationsVolumeClick()
     {
       if (digitalRead(DT_PIN2) == HIGH) 
       {
-        BT_menuUp();
+        // // BT_menuUp();
       } 
       else 
       {
-        BT_menuDown();
+        // // BT_menuDown();
       }
-      BT_displayMenu(u8g2);
+      // // BT_displayMenu(u8g2);
       u8g2.sendBuffer();
     }
     else if ((volumeSet == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
@@ -6742,21 +6810,24 @@ void handleEncoder2StationsVolumeClick()
   if ((button2.isPressed()) && (btMenuActive == true)) 
   {
     Serial.println("DEBUG BT: Encoder button pressed - selecting menu option");
-    BT_menuSelect();
-    BT_displayMenu(u8g2);
+    // BT_menuSelect();
+    // BT_displayMenu(u8g2);
     u8g2.sendBuffer();
   }
   
   if ((button2.isReleased()) && (listedStations == true)) 
   {
-    listedStations = false;
-    volumeSet = false;
-    changeStation();
-    if (!EQ16_isMenuActive()) {
-      displayRadio();
-      u8g2.sendBuffer();
+    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+    if (!sdPlayerOLEDActive) {
+      listedStations = false;
+      volumeSet = false;
+      changeStation();
+      if (!EQ16_isMenuActive()) {
+        displayRadio();
+        u8g2.sendBuffer();
+      }
+      clearFlags();
     }
-    clearFlags();
   }
 
   if ((button2.isPressed()) && (listedStations == false) && (bankMenuEnable == false)) 
@@ -6771,25 +6842,103 @@ void handleEncoder2StationsVolumeClick()
 
   if ((button2.isPressed()) && (bankMenuEnable == true)) 
   {
-    previous_bank_nr = bank_nr;
+    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
+    if (!sdPlayerOLEDActive) {
+      previous_bank_nr = bank_nr;
 
-    station_nr = 1;
+      station_nr = 1;
 
-    fetchStationsFromServer();
-    changeStation();
-    u8g2.clearBuffer();
-    if (!EQ16_isMenuActive()) {
-      displayRadio();
+      fetchStationsFromServer();
+      changeStation();
+      u8g2.clearBuffer();
+      if (!EQ16_isMenuActive()) {
+        displayRadio();
+      }
+
+      volumeSet = false;
+      bankMenuEnable = false;
     }
-
-    volumeSet = false;
-    bankMenuEnable = false;
   }
 
 }
 
 void handleEncoder2VolumeStationsClick()
 {
+  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
+  static int encoderClickCount = 0;
+  static unsigned long lastEncoderClickTime = 0;
+  
+  // Sprawdź triple-click tylko gdy SD Player nieaktywny
+  if (!sdPlayerOLEDActive) {
+    bool isPressed = (digitalRead(SW_PIN2) == LOW);
+    static bool lastPressState = false;
+    
+    if (isPressed && !lastPressState) {
+      // Nowe kliknięcie
+      unsigned long now = millis();
+      if (now - lastEncoderClickTime < 600) { // 600ms okno jak w IR Key9
+        encoderClickCount++;
+      } else {
+        encoderClickCount = 1; // Reset po timeout
+      }
+      lastEncoderClickTime = now;
+      
+      if (encoderClickCount >= 3) {
+        // Triple-click wykryty - aktywuj SD Player
+        if (g_sdPlayerOLED) {
+          g_sdPlayerOLED->activate();
+        }
+        encoderClickCount = 0; // Reset
+      }
+    }
+    lastPressState = isPressed;
+  }
+  
+  // Obsługa SDPlayer OLED
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    static unsigned long buttonPressStartTime2 = 0;
+    static bool wasPressed2 = false;
+    bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
+    
+    if (isPressed && !wasPressed2) {
+      // Przycisk został właśnie wciśnięty
+      buttonPressStartTime2 = millis();
+      wasPressed2 = true;
+    } else if (!isPressed && wasPressed2) {
+      // Przycisk został zwolniony
+      wasPressed2 = false;
+      unsigned long pressDuration = millis() - buttonPressStartTime2;
+      
+      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
+      if (pressDuration < 4000) {
+        g_sdPlayerOLED->onEncoderButton();
+      }
+    } else if (isPressed && wasPressed2) {
+      // Przycisk jest ciągle przytrzymany - sprawdzamy czas
+      unsigned long pressDuration = millis() - buttonPressStartTime2;
+      if (pressDuration >= 4000) {
+        // Długie przytrzymanie - wyjście do radia
+        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
+        wasPressed2 = false; // Reset aby nie wywoływać wielokrotnie
+        return;
+      }
+    }
+    
+    // Obsługa obracania enkodera
+    CLK_state2 = digitalRead(CLK_PIN2);
+    if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH) {
+      if (digitalRead(DT_PIN2) == HIGH) {
+        g_sdPlayerOLED->onEncoderLeft();  // Lewo = Góra
+      } else {
+        g_sdPlayerOLED->onEncoderRight(); // Prawo = Dół
+      }
+    }
+    prev_CLK_state2 = CLK_state2;
+    
+    return; // Wyjdź z funkcji - SDPlayer obsłużony
+  }
+  
   CLK_state2 = digitalRead(CLK_PIN2);                       // Odczytanie aktualnego stanu pinu CLK enkodera 2
   if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH)  // Sprawdzenie, czy stan CLK zmienił się na wysoki
   {
@@ -6802,13 +6951,13 @@ void handleEncoder2VolumeStationsClick()
     {
       if (digitalRead(DT_PIN2) == HIGH) 
       {
-        BT_menuUp();
+        // BT_menuUp();
       } 
       else 
       {
-        BT_menuDown();
+        // BT_menuDown();
       }
-      BT_displayMenu(u8g2);
+      // BT_displayMenu(u8g2);
       u8g2.sendBuffer();
     }
     else if ((listedStations == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
@@ -8756,16 +8905,16 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
   // -------------------- RECOVERY MODE --------------------
   recoveryModeCheck();
   
-  // -------------------- BLUETOOTH KCX INIT --------------------
-  BT_init();  // Inicjalizacja modułu Bluetooth KCX_BT_EMITTER
+  // -------------------- SDPLAYER INIT --------------------
+  SDPlayerOLED_init(&u8g2);  // Inicjalizacja SD Player z OLED
+  Serial.println("SDPlayer: Initialized");
   
-  // -------------------- SD PLAYER INIT --------------------
-  if (!noSDcard) {
-    sdPlayer.begin(&STORAGE, &audio);  // Inicjalizacja SD Player
-    Serial.println("SD Player initialized successfully");
-  } else {
-    Serial.println("SD Player not initialized - no SD card");
-  }
+  // -------------------- BLUETOOTH WEBUI INIT --------------------
+  BTWebUI_init();  // Inicjalizacja Bluetooth WebUI
+  Serial.println("BTWebUI: Initialized");
+  
+  // -------------------- BLUETOOTH KCX INIT --------------------
+  // BT_init(&u8g2);  // Inicjalizacja modułu Bluetooth KCX_BT_EMITTER
   
   previous_bank_nr = bank_nr;  // wyrównanie wartości przy stacie radia aby nie podmienic bank_nr na wartość 0 po pierwszym upływie czasu menu
   Serial.print("debug1...wartość bank_nr:");
@@ -9396,245 +9545,30 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
     });
     
     // =====================================================================================
-    // BLUETOOTH WEB ENDPOINTS
+    // SDPLAYER WEB ENDPOINTS
     // =====================================================================================
+    SDPlayerWebUI_registerHandlers(server);  // Rejestracja handlerów SDPlayer
+    
+    // =====================================================================================
+    // BLUETOOTH WEBUI ENDPOINTS (MUST BE REGISTERED BEFORE OTHER /bt ROUTES)
+    // =====================================================================================
+    BTWebUI_registerHandlers(server);  // Rejestracja handlerów BTWebUI
+    
+    // TESTOWY ENDPOINT - sprawdzenie czy routing działa
+    server.on("/bt/api/maintest", HTTP_GET, [](AsyncWebServerRequest *request) {
+        Serial.println("[MAIN TEST] Direct test endpoint called!");
+        request->send(200, "text/plain", "MAIN.CPP TEST OK - direct routing works!");
+    });
+    
+    // =====================================================================================
+    // OLD BT ENDPOINTS - DISABLED (commented out to avoid conflicts)
+    // =====================================================================================
+    // NOTE: All old /bt routes are commented out to prevent conflicts with BTWebUI
+    /*
     server.on("/bt", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String html = FPSTR(bt_html);
-      BTState state = BT_getState();
-      
-      // Status class
-      if (state.mode == BT_MODE_OFF || !state.enabled) {
-        html.replace(F("%BT_STATUS_CLASS%"), "off");
-        html.replace(F("%BT_STATUS%"), "Bluetooth OFF");
-      } else if (state.connected) {
-        html.replace(F("%BT_STATUS_CLASS%"), "connected");
-        html.replace(F("%BT_STATUS%"), "Connected");
-      } else {
-        html.replace(F("%BT_STATUS_CLASS%"), "disconnected");
-        html.replace(F("%BT_STATUS%"), "Disconnected");
-      }
-      
-      // Mode text
-      html.replace(F("%BT_MODE%"), BT_getModeString(state.mode));
-      html.replace(F("%BT_MODE_VAL%"), String((int)state.mode));
-      
-      // Device name
-      html.replace(F("%BT_DEVICE%"), state.deviceName.length() > 0 ? state.deviceName : "None");
-      
-      // Volume
-      html.replace(F("%BT_VOLUME%"), String(state.volume));
-      
-      // Active buttons
-      html.replace(F("%BT_OFF_ACTIVE%"), state.mode == BT_MODE_OFF ? "active" : "");
-      html.replace(F("%BT_RX_ACTIVE%"), state.mode == BT_MODE_RX ? "active" : "");
-      html.replace(F("%BT_TX_ACTIVE%"), state.mode == BT_MODE_TX ? "active" : "");
-      html.replace(F("%BT_AUTO_ACTIVE%"), state.mode == BT_MODE_AUTO ? "active" : "");
-      
-      request->send(200, "text/html", html);
+      ... old code ...
     });
-    
-    server.on("/bt/mode", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("m")) {
-        int mode = request->getParam("m")->value().toInt();
-        BT_setMode((BTMode)mode);
-        Serial.printf("BT Web: Mode set to %d\n", mode);
-      }
-      request->send(200, "text/plain", "OK");
-    });
-    
-    server.on("/bt/volume", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("v")) {
-        int vol = request->getParam("v")->value().toInt();
-        BT_setVolume(vol);
-        Serial.printf("BT Web: Volume set to %d\n", vol);
-      }
-      request->send(200, "text/plain", "OK");
-    });
-    
-    server.on("/bt/scan", HTTP_GET, [](AsyncWebServerRequest *request) {
-      BT_startScan();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='3;url=/bt'></head><body><h1>Scanning for Bluetooth devices...</h1></body></html>");
-    });
-    
-    server.on("/bt/disconnect", HTTP_GET, [](AsyncWebServerRequest *request) {
-      BT_disconnect();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>Bluetooth Disconnected</h1></body></html>");
-    });
-    
-    server.on("/bt/deleteall", HTTP_GET, [](AsyncWebServerRequest *request) {
-      BT_deleteAllPairedDevices();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>All paired devices deleted</h1></body></html>");
-    });
-    
-    server.on("/bt/save", HTTP_POST, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("mode", true)) {
-        int mode = request->getParam("mode", true)->value().toInt();
-        BT_setMode((BTMode)mode);
-      }
-      if (request->hasParam("volume", true)) {
-        int vol = request->getParam("volume", true)->value().toInt();
-        BT_setVolume(vol);
-      }
-      BT_saveConfig();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/bt'></head><body><h1>Bluetooth Settings Saved!</h1></body></html>");
-    });
-    
-    // Dodatkowe API dla BT
-    server.on("/api/bt/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-      BTState state = BT_getState();
-      String json = "{";
-      json += "\"enabled\":" + String(state.enabled ? "true" : "false") + ",";
-      json += "\"mode\":\"" + BT_getModeString(state.mode) + "\",";
-      json += "\"modeValue\":" + String((int)state.mode) + ",";
-      json += "\"connected\":" + String(state.connected ? "true" : "false") + ",";
-      json += "\"scanning\":" + String(state.scanning ? "true" : "false") + ",";
-      json += "\"volume\":" + String(state.volume) + ",";
-      json += "\"boost\":" + String(state.boost) + ",";
-      json += "\"deviceName\":\"" + state.deviceName + "\",";
-      json += "\"deviceAddr\":\"" + state.deviceAddr + "\"";
-      json += "}";
-      request->send(200, "application/json", json);
-    });
-    
-    server.on("/api/bt/enable", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("state")) {
-        bool enable = request->getParam("state")->value() == "1" || 
-                     request->getParam("state")->value().equalsIgnoreCase("true");
-        BT_enable(enable);
-        request->send(200, "text/plain", enable ? "BT Enabled" : "BT Disabled");
-      } else {
-        request->send(400, "text/plain", "Missing state parameter");
-      }
-    });
-    
-    server.on("/api/bt/cmd", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("raw")) {
-        String cmd = request->getParam("raw")->value();
-        String result = BT_sendRaw(cmd);
-        request->send(200, "text/plain", "Sent: " + cmd + "\nResult: " + result);
-      } else {
-        request->send(400, "text/plain", "Missing raw command parameter");
-      }
-    });
-    
-    server.on("/api/bt/log", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String log = BT_getLog();
-      request->send(200, "text/plain", log);
-    });
-    
-    // ==================== SD PLAYER WEB HANDLERS ====================
-    
-    server.on("/sdplayer", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String html = String(sdplayer_html);
-      
-      // Status informacje
-      if (sdPlayer.isPlaying()) {
-        html.replace(F("%SD_STATUS_CLASS%"), "playing");
-        html.replace(F("%SD_STATUS%"), "Playing");
-      } else if (sdPlayer.isActive()) {
-        html.replace(F("%SD_STATUS_CLASS%"), "stopped");
-        html.replace(F("%SD_STATUS%"), "Active - Stopped");
-      } else {
-        html.replace(F("%SD_STATUS_CLASS%"), "disconnected");
-        html.replace(F("%SD_STATUS%"), "Inactive");
-      }
-      
-      // Podstawowe informacje
-      html.replace(F("%SD_CURRENT_DIR%"), sdPlayer.currentDir());
-      html.replace(F("%SD_NOW_PLAYING%"), sdPlayer.isPlaying() ? sdPlayer.nowPlayingName() : "None");
-      html.replace(F("%SD_VOLUME%"), String(volumeValue));
-      
-      // Lista plików
-      String fileList = "";
-      int count = sdPlayer.itemCount();
-      for (int i = 0; i < count; i++) {
-        const SDPlayerItem& item = sdPlayer.item(i);
-        String cssClass = item.isDir ? "dir" : "audio";
-        String icon = item.isDir ? "📁" : "🎵";
-        fileList += "<div class=\"file-item " + cssClass + "\" onclick=\"selectFile('" + item.path + "', " + (item.isDir ? "true" : "false") + ")\">";
-        fileList += icon + " " + item.name + "</div>\n";
-      }
-      html.replace(F("%SD_FILE_LIST%"), fileList);
-      
-      request->send(200, "text/html", html);
-    });
-    
-    server.on("/api/sd/cmd", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (!request->hasParam("action")) {
-        request->send(400, "text/plain", "Missing action parameter");
-        return;
-      }
-      
-      String action = request->getParam("action")->value();
-      String result = "OK";
-      
-      if (action == "play") {
-        if (sdPlayer.itemCount() > 0) {
-          sdPlayer.playIndex(sdPlayer.selection);
-        } else {
-          result = "No files to play";
-        }
-      }
-      else if (action == "pause" || action == "stop") {
-        sdPlayer.stop();
-      }
-      else if (action == "next") {
-        sdPlayer.onDown();
-        if (sdPlayer.isPlaying()) {
-          sdPlayer.playIndex(sdPlayer.selection);
-        }
-      }
-      else if (action == "prev") {
-        sdPlayer.onUp();
-        if (sdPlayer.isPlaying()) {
-          sdPlayer.playIndex(sdPlayer.selection);
-        }
-      }
-      else if (action == "updir") {
-        sdPlayer.onBack();
-      }
-      else if (action == "enterdir" && request->hasParam("path")) {
-        String path = request->getParam("path")->value();
-        sdPlayer.loadDir(path);
-      }
-      else if (action == "playfile" && request->hasParam("path")) {
-        String path = request->getParam("path")->value();
-        // Znajdź indeks pliku i odtwórz
-        for (int i = 0; i < sdPlayer.itemCount(); i++) {
-          if (sdPlayer.item(i).path == path) {
-            sdPlayer.selection = i;
-            sdPlayer.playIndex(i);
-            break;
-          }
-        }
-      }
-      else {
-        result = "Unknown action: " + action;
-      }
-      
-      request->send(200, "text/plain", result);
-    });
-    
-    server.on("/api/sd/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(200, "application/json", sdPlayer.jsonStatus());
-    });
-    
-    server.on("/api/sd/list", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String dir = request->hasParam("dir") ? request->getParam("dir")->value() : sdPlayer.currentDir();
-      request->send(200, "application/json", sdPlayer.jsonList(dir));
-    });
-    
-    server.on("/api/sd/volume", HTTP_GET, [](AsyncWebServerRequest *request) {
-      if (request->hasParam("v")) {
-        int vol = request->getParam("v")->value().toInt();
-        if (vol >= 0 && vol <= 30) {
-          volumeValue = vol;
-          audio.setVolume(volumeValue);
-          Serial.printf("SD Player Web: Volume set to %d\n", vol);
-        }
-      }
-      request->send(200, "text/plain", "OK");
-    });
+    */
     
     server.on("/toggleAdcDebug", HTTP_POST, [](AsyncWebServerRequest *request) 
     {
@@ -10538,7 +10472,16 @@ void loop()
 {
   runTime1 = esp_timer_get_time();
   audio.loop();           // Wykonuje główną pętlę dla obiektu audio (np. odtwarzanie dźwięku, obsługa audio)
-  BT_loop();              // Obsługa modułu Bluetooth KCX_BT_EMITTER (tylko if-y, bez tasków)
+  // BT_loop();              // Obsługa modułu Bluetooth KCX_BT_EMITTER (tylko if-y, bez tasków)
+  SDPlayerOLED_loop();    // Obsługa SDPlayer OLED
+  BTWebUI_loop();         // Obsługa Bluetooth WebUI
+  
+  // Obsługa auto-play SDPlayera (w głównej pętli, nie w callback Audio)
+  if (sdPlayerAutoPlayNext && g_sdPlayerWeb && sdPlayerPlayingMusic) {
+    sdPlayerAutoPlayNext = false; // Zresetuj flagę
+    Serial.println("[SDPlayer] Wykonywanie auto-play następnego utworu");
+    g_sdPlayerWeb->playNextAuto();
+  }
   button2.loop();         // Wykonuje pętlę dla obiektu button2 (sprawdza stan przycisku z enkodera 2)
   handleButtons();        // Wywołuje funkcję obsługującą przyciski i wykonuje odpowiednie akcje (np. zmiana opcji, wejście do menu)
   handleFadeIn();
@@ -10641,6 +10584,100 @@ void loop()
       //displayDimmer(0); // jesli odbierzemy kod z pilota to wyłaczamy przyciemnienie wyswietlacza OLED
       displayPowerSave(0);
       
+      // ===== SDPLAYER PILOT ROUTING (PRIORITY) =====
+      if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+        // Obsługa dedykowanych przycisków SDPlayera
+        if (ir_code == rcCmdArrowUp) {
+          g_sdPlayerOLED->onRemoteUp();
+        }
+        else if (ir_code == rcCmdArrowDown) {
+          g_sdPlayerOLED->onRemoteDown();
+        }
+        else if (ir_code == rcCmdOk) {
+          g_sdPlayerOLED->onRemoteOK();
+        }
+        else if (ir_code == rcCmdSrc) {
+          // SRC - zmiana stylu OLED SDPlayera
+          g_sdPlayerOLED->nextStyle();
+          Serial.println("DEBUG: SDPlayer style changed via SRC");
+        }
+        else if (ir_code == rcCmdBT) {
+          // BT button - ponieważ moduł BT usunięty, używamy jako dodatkowy przycisk zmiany stylu
+          g_sdPlayerOLED->nextStyle();
+          Serial.println("DEBUG: SDPlayer style changed via BT button (BT module removed)");
+        }
+        else if (ir_code == rcCmdBack) {
+          // BACK - podwójne kliknięcie wychodzi z SDPlayera, pojedyncze = STOP
+          static unsigned long lastBackPress = 0;
+          static uint8_t backClickCount = 0;
+          unsigned long currentTime = millis();
+          
+          if (currentTime - lastBackPress > 600) { // 600ms okno
+            backClickCount = 0; // Reset po timeout
+          }
+          
+          backClickCount++;
+          lastBackPress = currentTime;
+          
+          if (backClickCount >= 2) {
+            // Podwójne kliknięcie - wyjście z SDPlayera
+            Serial.println("DEBUG: Double BACK press - exiting SDPlayer to radio");
+            backClickCount = 0; // Reset
+            
+            g_sdPlayerOLED->deactivate();
+            sdPlayerOLEDActive = false;
+            sdPlayerPlayingMusic = false;
+            audio.stopSong();
+            
+            // Ustaw bank 1, stację 4
+            bank_nr = 1;
+            station_nr = 4;
+            changeStation();
+            displayRadio();
+            u8g2.sendBuffer();
+          } else {
+            // Pojedyncze kliknięcie - STOP
+            g_sdPlayerOLED->onRemoteStop();
+            Serial.println("SD Player: BACK button - STOP (press again quickly to exit)");
+          }
+        }
+        else if (ir_code == rcCmdKey0) {
+          // Key0 - wyjście z SDPlayera do radia
+          Serial.println("DEBUG: Exiting SDPlayer to radio Bank 1, Station 4");
+          g_sdPlayerOLED->deactivate();
+          sdPlayerOLEDActive = false;
+          sdPlayerPlayingMusic = false;
+          audio.stopSong();
+          
+          // Ustaw bank 1, stację 4
+          bank_nr = 1;
+          station_nr = 4;
+          changeStation();
+          displayRadio();
+          u8g2.sendBuffer();
+        }
+        else if (ir_code == rcCmdVolumeUp) {
+          g_sdPlayerOLED->onRemoteVolUp();
+        }
+        else if (ir_code == rcCmdVolumeDown) {
+          g_sdPlayerOLED->onRemoteVolDown();
+        }
+        else if (ir_code == rcCmdKey9) {
+          // Key9 - pozostaw bez zmian, obsłuży poniższy kod
+          // NIE BLOKUJ Key9 - pozwól mu przejść dalej
+        }
+        else {
+          // WSZYSTKIE inne przyciski są ignorowane gdy SDPlayer aktywny
+          Serial.printf("DEBUG: SDPlayer active - blocking IR code 0x%04X\n", ir_code);
+        }
+        
+        // Zablokuj WSZYSTKIE komendy oprócz Key9 (dla triple-click exit)
+        if (ir_code != rcCmdKey9) {
+          ir_code = 0;
+        }
+      }
+      // ===== KONIEC SDPLAYER ROUTING =====
+      
       if (ir_code == rcCmdVolumeUp)  { volumeUp(); }         // Przycisk głośniej
       else if (ir_code == rcCmdVolumeDown) { volumeDown(); } // Przycisk ciszej
       else if (ir_code == rcCmdArrowRight) // strzałka w prawo - nastepna stacja, bank lub nastawy equalizera
@@ -10657,8 +10694,8 @@ void loop()
         else if (btMenuActive == true)  // BT MENU NAVIGATION
         {
           Serial.println("DEBUG BT: Arrow RIGHT - menu down");
-          BT_menuDown();
-          BT_displayMenu(u8g2);
+          // BT_menuDown();
+          // BT_displayMenu(u8g2);
           u8g2.sendBuffer();
         }
         else if (eq16MenuActive == true)  // 16-BAND EQ NAVIGATION
@@ -10721,8 +10758,8 @@ void loop()
         else if (btMenuActive == true)  // BT MENU NAVIGATION
         {
           Serial.println("DEBUG BT: Arrow LEFT - menu up");
-          BT_menuUp();
-          BT_displayMenu(u8g2);
+          // BT_menuUp();
+          // BT_displayMenu(u8g2);
           u8g2.sendBuffer();
         }
         else if (eq16MenuActive == true)  // 16-BAND EQ NAVIGATION
@@ -10785,8 +10822,8 @@ void loop()
       else if ((ir_code == rcCmdArrowUp) && (btMenuActive == true))
       {
         Serial.println("DEBUG BT: Arrow UP - menu up");
-        BT_menuUp();
-        BT_displayMenu(u8g2);
+        // BT_menuUp();
+        // BT_displayMenu(u8g2);
         u8g2.sendBuffer();
       }
       else if ((ir_code == rcCmdArrowUp) && (eq16MenuActive == true))
@@ -10854,8 +10891,8 @@ void loop()
       else if ((ir_code == rcCmdArrowDown) && (btMenuActive == true))
       {
         Serial.println("DEBUG BT: Arrow DOWN - menu down");
-        BT_menuDown();
-        BT_displayMenu(u8g2);
+        // BT_menuDown();
+        // BT_displayMenu(u8g2);
         u8g2.sendBuffer();
       }
       else if ((ir_code == rcCmdArrowDown) && (eq16MenuActive == true))
@@ -10929,8 +10966,8 @@ void loop()
         if (btMenuActive == true) { 
           // Wybór opcji w menu BT
           Serial.println("DEBUG BT: OK pressed - selecting menu option");
-          BT_menuSelect();
-          BT_displayMenu(u8g2);
+          // BT_menuSelect();
+          // BT_displayMenu(u8g2);
           u8g2.sendBuffer();
           return; // Kończymy obsługę - nie wykonujemy changeStation()
         }
@@ -11004,7 +11041,37 @@ void loop()
       else if (ir_code == rcCmdKey6) {rcInputKey(6);}     
       else if (ir_code == rcCmdKey7) {rcInputKey(7);}     
       else if (ir_code == rcCmdKey8) {rcInputKey(8);}     
-      else if (ir_code == rcCmdKey9) {rcInputKey(9);}
+      else if (ir_code == rcCmdKey9) {
+        // Sprawdź czy to 3-krotne naciśnięcie dla aktywacji SDPlayer
+        static unsigned long lastKey9Press = 0;
+        static uint8_t key9ClickCount = 0;
+        unsigned long currentTime = millis();
+        
+        if (currentTime - lastKey9Press > 2000) {
+          key9ClickCount = 0; // Timeout - reset licznika
+        }
+        
+        key9ClickCount++;
+        lastKey9Press = currentTime;
+        
+        Serial.printf("DEBUG: Key9 pressed %d times\n", key9ClickCount);
+        
+        if (key9ClickCount >= 3) {
+          // 3-krotne naciśnięcie - aktywuj SDPlayer OLED
+          Serial.println("DEBUG: Triple Key9 press detected - activating SDPlayer!");
+          key9ClickCount = 0; // Reset licznika
+          
+          if (g_sdPlayerOLED && !g_sdPlayerOLED->isActive()) {
+            audio.stopSong(); // Zatrzymaj radio
+            g_sdPlayerOLED->activate();
+            sdPlayerOLEDActive = true;
+            Serial.println("DEBUG: SDPlayer OLED activated");
+          }
+        } else {
+          // Zwykłe naciśnięcie - normalna funkcja
+          rcInputKey(9);
+        }
+      }
       else if (ir_code == rcCmdBack) 
       {   
         displayDimmer(0);
@@ -11063,7 +11130,8 @@ void loop()
       else if (ir_code == rcCmdGreen) {sleepTimerSet();}
       else if (ir_code == rcCmdBT)  // Przycisk Bluetooth - toggle menu BT
       {
-        Serial.println("DEBUG: BT button pressed - toggling BT menu");
+        Serial.println("DEBUG: BT button pressed - toggling BT menu (DISABLED - KCX MODULE REMOVED)");
+        /*
         if (!BT_isMenuActive()) {
           // Aktywacja menu BT
           clearFlags();
@@ -11079,6 +11147,7 @@ void loop()
           displayRadio();
           u8g2.sendBuffer();
         }
+        */
       }   
       else if (ir_code == rcCmdBankMinus) 
       {
@@ -11235,6 +11304,12 @@ void loop()
     // Obsługa VU meter i analizatora
     if (vuMeterOn)
     { 
+      // GUARD: Nie rysuj VU Meter ani analizatora gdy SDPlayer aktywny
+      if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+        // SDPlayer kontroluje wyświetlacz - pomiń całą sekcję VU/Analyzer
+        return;
+      }
+      
       // Gdy EQ16 menu jest aktywne, pokaż tylko menu
       if (EQ16_isMenuActive()) {
         // EQ16 menu zawsze pokazuje analizator + interface
@@ -11357,3 +11432,4 @@ void loop()
   //runTime2 = esp_timer_get_time();
   //runTime = runTime2 - runTime1;  
 }
+

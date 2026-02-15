@@ -1819,7 +1819,7 @@ const char *ntpServer2 = "time.nist.gov"; // Adres serwera NTP używany do synch
 const int LOGO_SIZE = (SCREEN_WIDTH * SCREEN_HEIGHT) / 8;
 uint8_t logo_bits[LOGO_SIZE];
 
-const uint8_t spleen6x12PL[2958] U8G2_FONT_SECTION("spleen6x12PL") =
+uint8_t spleen6x12PL[2958] U8G2_FONT_SECTION("spleen6x12PL") =
   "\340\1\3\2\3\4\1\3\4\6\14\0\375\10\376\11\377\1\225\3]\13q \7\346\361\363\237\0!\12"
   "\346\361#i\357`\316\0\42\14\346\361\3I\226dI\316/\0#\21\346\361\303I\64HI\226dI"
   "\64HIN\6$\22\346q\205CRK\302\61\311\222,I\206\60\247\0%\15\346\361cQK\32\246"
@@ -7053,6 +7053,7 @@ void handleEncoder2VolumeStationsClick()
     }
     if (!EQ16_isMenuActive()) {
       displayRadio();
+      u8g2.sendBuffer(); // Natychmiastowa aktualizacja ekranu po MUTE
     }
     return;
   }
@@ -8790,6 +8791,7 @@ void setup()
   // Wczytaj osobny config wyglądu analizatora (/analyzer)
   // Odczytaj plik w main.cpp (gdzie SD jest zainicjalizowane) i przekaż do parsera
   {
+    Serial.println("\n*** LOADING ANALYZER CONFIGURATION ***");
     Serial.println("DEBUG: Odczyt analyzer.cfg w main.cpp...");
     File cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
     if (cfgFile) {
@@ -8801,6 +8803,7 @@ void setup()
       Serial.println("DEBUG: analyzer.cfg nie istnieje lub błąd otwarcia - używam domyślnych");
       analyzerStyleLoad();  // Użyj domyślnych wartości
     }
+    Serial.println("*** ANALYZER CONFIGURATION LOAD FINISHED ***\n");
   }
   eq_analyzer_init();
   eq_analyzer_set_enabled(eqAnalyzerOn);   // Set initial state from config
@@ -10334,6 +10337,52 @@ server.on("/analyzerReload", HTTP_POST, [](AsyncWebServerRequest *request){
   request->redirect("/analyzerDiag");
 });
 
+// Diagnostic endpoint - pokazuje zawartość pliku analyzer.cfg
+server.on("/analyzerDebug", HTTP_GET, [](AsyncWebServerRequest *request){
+  String response = "<html><head><meta charset='UTF-8'></head><body>";
+  response += "<h1>Analyzer Config Debug</h1>";
+  
+  File cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
+  if (cfgFile) {
+    size_t fileSize = cfgFile.size();
+    response += "<p><b>Plik istnieje:</b> TAK</p>";
+    response += "<p><b>Rozmiar:</b> " + String(fileSize) + " bajtów</p>";
+    response += "<h2>Zawartość pliku:</h2><pre>";
+    response += cfgFile.readString();
+    response += "</pre>";
+    cfgFile.close();
+    
+    // Teraz przeładuj z logami
+    response += "<h2>Ponowne ładowanie z Serial logs...</h2>";
+    Serial.println("\n*** MANUAL RELOAD FROM /analyzerDebug ***");
+    cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
+    if (cfgFile) {
+      String content = cfgFile.readString();
+      cfgFile.close();
+      Serial.printf("DEBUG: Odczytano %u bajtów z analyzer.cfg\n", content.length());
+      analyzerStyleLoadFromString(content);
+      response += "<p>Zobacz Serial Monitor dla szczegółowych logów!</p>";
+    }
+    Serial.println("*** RELOAD COMPLETE ***\n");
+  } else {
+    response += "<p><b>Plik istnieje:</b> NIE</p>";
+    response += "<p>ERROR: Nie można otworzyć /analyzer.cfg</p>";
+  }
+  
+  response += "<p><a href='/analyzer'>Powrót do Analyzer</a></p>";
+  response += "</body></html>";
+  request->send(200, "text/html", response);
+});
+
+// Test manual save - wywołuje analyzerStyleSave() z Serial logs
+server.on("/analyzerTestSave", HTTP_GET, [](AsyncWebServerRequest *request){
+  Serial.println("\n*** MANUAL SAVE TEST FROM /analyzerTestSave ***");
+  analyzerStyleSave();
+  Serial.println("*** SAVE TEST COMPLETE ***\n");
+  
+  request->send(200, "text/plain", "Test save complete - check Serial Monitor for logs!");
+});
+
 // Test generator toggle
 server.on("/analyzerTest", HTTP_GET, [](AsyncWebServerRequest *request){
   bool currentState = false; // Należy dodać getter dla stanu test generatora
@@ -11095,6 +11144,7 @@ void loop()
         }
         if (!EQ16_isMenuActive()) {
           displayRadio();
+          u8g2.sendBuffer(); // Natychmiastowa aktualizacja ekranu po MUTE
         }
         wsVolumeChange(volumeValue);
       }

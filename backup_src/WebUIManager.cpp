@@ -8,74 +8,34 @@ const char WebUIManager::MAIN_MENU_HTML[] PROGMEM = R"HTML(
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Evo Web Radio - Menu</title>
+<title>ESP32 Radio - Main Menu</title>
 <style>
   body{font-family:Arial,Helvetica,sans-serif;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);margin:0;padding:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
-  .container{max-width:500px;width:90%;background:#fff;border-radius:20px;padding:30px 20px;box-shadow:0 10px 40px rgba(0,0,0,.3);text-align:center}
-  h1{margin:0 0 10px 0;color:#333;font-size:28px}
-  .subtitle{color:#666;margin-bottom:20px;font-size:14px}
-  .menu-item{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border:0;border-radius:10px;padding:15px;margin:8px 0;width:100%;font-size:16px;font-weight:600;cursor:pointer;transition:all .3s;box-shadow:0 4px 15px rgba(102,126,234,.4);text-align:left}
-  .menu-item:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(102,126,234,.6)}
+  .container{max-width:500px;width:90%;background:#fff;border-radius:20px;padding:40px 30px;box-shadow:0 10px 40px rgba(0,0,0,.3);text-align:center}
+  h1{margin:0 0 10px 0;color:#333;font-size:32px}
+  .subtitle{color:#666;margin-bottom:30px;font-size:14px}
+  .menu-item{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;border:0;border-radius:12px;padding:20px;margin:12px 0;width:100%;font-size:18px;font-weight:600;cursor:pointer;transition:all .3s;box-shadow:0 4px 15px rgba(102,126,234,.4)}
+  .menu-item:hover{transform:translateY(-3px);box-shadow:0 6px 20px rgba(102,126,234,.6)}
   .menu-item:active{transform:translateY(-1px)}
-  .menu-item .icon{font-size:20px;margin-right:10px}
-  .footer{margin-top:20px;color:#999;font-size:12px}
+  .menu-item .icon{font-size:24px;margin-right:10px}
+  .footer{margin-top:30px;color:#999;font-size:12px}
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>🎵 Evo Web Radio</h1>
-  <div class="subtitle">Menu</div>
-  
-  <button class="menu-item" onclick="location.href='/info'">
-    <span class="icon">ℹ️</span> Info
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/ota'">
-    <span class="icon">🔄</span> OTA Update
-  </button>
+  <h1>🎵 ESP32 Radio</h1>
+  <div class="subtitle">Evolution v3.19</div>
   
   <button class="menu-item" onclick="location.href='/sdplayer'">
-    <span class="icon">💿</span> SD Player
-  </button>
-  
-  <button class="menu-item" onclick="alert('Analyzer Edit - coming soon')">
-    <span class="icon">📊</span> Analyzer Edit
-  </button>
-  
-  <button class="menu-item" onclick="alert('ADC Keyboard Settings - coming soon')">
-    <span class="icon">⌨️</span> ADC Keyboard Settings
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/edit'">
-    <span class="icon">📁</span> SD / SPIFFS Explorer
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/editor'">
-    <span class="icon">💾</span> Memory Bank Editor
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/browser'">
-    <span class="icon">📻</span> Radio Browser API
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/playurl'">
-    <span class="icon">🔗</span> Play from URL
+    <span class="icon">💾</span> SD Player Control
   </button>
   
   <button class="menu-item" onclick="location.href='/bt'">
-    <span class="icon">📡</span> Bluetooth Settings
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/config'">
-    <span class="icon">⚙️</span> Settings
-  </button>
-  
-  <button class="menu-item" onclick="location.href='/'">
-    <span class="icon">⬅️</span> Go Back
+    <span class="icon">📶</span> Bluetooth Settings
   </button>
   
   <div class="footer">
-    ESP32-WROOM-32D | Evolution v3.19 | 2026
+    ESP32-WROOM-32D | 2026
   </div>
 </div>
 </body>
@@ -132,5 +92,5 @@ void WebUIManager::setupMainMenu() {
 }
 
 void WebUIManager::handleMainMenu(AsyncWebServerRequest *request) {
-    request->send(200, "text/html", MAIN_MENU_HTML);
+    request->send_P(200, "text/html", MAIN_MENU_HTML);
 }

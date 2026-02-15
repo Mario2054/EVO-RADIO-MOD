@@ -106,10 +106,10 @@ void analyzerSetStyle(const AnalyzerStyleCfg& c);
 // Wczytaj/zapisz z STORAGE (SD/SPIFFS) – plik tekstowy /analyzer.cfg
 void analyzerStyleLoad();
 void analyzerStyleSave();
-void analyzerStyleLoadFromString(const String& content);  // Parsuj zawartość pliku
-String analyzerStyleToSaveString();  // Generuj zawartość do zapisu
 
-// Diagnostyka - status wczytania konfiguracji
+// Funkcje do zapisu/odczytu stylu jako String (dla main.cpp)
+String analyzerStyleToSaveString();
+void analyzerStyleLoadFromString(const String& content);
 String analyzerGetLoadStatus();
 int analyzerGetLoadedParamsCount();
 
