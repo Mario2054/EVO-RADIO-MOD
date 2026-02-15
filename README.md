@@ -1,5 +1,5 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
-Dodaje modyfikacje do projektu EVO3 
+Dodaje modyfikacje do projektu EVO 
 
 <img width="498" height="781" alt="image" src="https://github.com/user-attachments/assets/55817c32-842d-4a41-a41d-2be92e78c8d0" />
 
