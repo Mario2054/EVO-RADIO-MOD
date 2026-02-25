@@ -4,8 +4,8 @@ Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.70b MOD SDP_BT_EQ16_ANALIZATO
 
 Do TESTÓW DODANO SD RECORDING TEST nagrywania wav działą lecz przycina sprawdzcie sami . obsługa z pilota DIRECT/OK REC na panelu radyjka nagrywanie DIRECT/OK KONIEC nagrywania
 
-Poprawiono obsługe listy zminiono napisy poprawiono kilka bledów menu elkalizera 16K jest wywoływane po 00 tam jet przełacznie miedzy EQ3 A EQ16 
-Uruchomieni SDPLARERA AUD AUD i pokazuje sie napis SD PLAYER przycisk up lub down uruchamia ładowanie listy.
+Poprawiono obsługe listy zminiono napisy poprawiono kilka bledów menu eqalizera 16K jest wywoływane po 00 tam jest przełacznie miedzy EQ3 A EQ16 
+Uruchomienie SDPLARERA AUD AUD i pokazuje sie napis SD PLAYER przycisk up lub down uruchamia ładowanie listy.
 
 
 <img width="627" height="909" alt="image" src="https://github.com/user-attachments/assets/b0f14f83-5e70-4521-8c4e-8874791692c0" />
