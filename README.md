@@ -1,8 +1,9 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
-Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.53 MOD SDP_BT_EQ16_ANALIZATOR
+Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.70b MOD SDP_BT_EQ16_ANALIZATOR  SD PLAYER SD RECORDING
 <img width="1045" height="841" alt="image" src="https://github.com/user-attachments/assets/23ca9f13-2d80-4b93-9c70-4e6f4859f072" />
 
-Do TESTÓW DODANO SD RECORDING TEST nagrywania wav działą lecz przycina sprawdzcie sami . obsługa z pilota DIRECT/OK REC na panelu radyjka nagrywanie DIRECT/OK KONIEC nagrywania 
+Do TESTÓW DODANO SD RECORDING TEST nagrywania wav działą lecz przycina sprawdzcie sami . obsługa z pilota DIRECT/OK REC na panelu radyjka nagrywanie DIRECT/OK KONIEC nagrywania
+
 Poprawiono obsługe listy zminiono napisy poprawiono kilka bledów menu elkalizera 16K jest wywoływane po 00 tam jet przełacznie miedzy EQ3 A EQ16 
 Uruchomieni SDPLARERA AUD AUD i pokazuje sie napis SD PLAYER przycisk up lub down uruchamia ładowanie listy.
 
@@ -14,6 +15,4 @@ Uruchomieni SDPLARERA AUD AUD i pokazuje sie napis SD PLAYER przycisk up lub dow
 <img width="883" height="744" alt="image" src="https://github.com/user-attachments/assets/b3d19d65-0937-4e90-9c10-c64100415bf0" />
 <img width="878" height="424" alt="image" src="https://github.com/user-attachments/assets/16c1b6f0-d576-431c-a647-d4f62200563d" />
 <img width="861" height="758" alt="image" src="https://github.com/user-attachments/assets/1a5b7249-e896-4f2e-b820-9e3051544f89" />
-<img width="852" height="851" alt="image" src="https://github.com/user-attachments/assets/c5e6f970-5d10-4224-a99c-7c7948abd494" />
-
 
