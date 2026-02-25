@@ -1,12 +1,15 @@
 /*
-  EVO-BT-TX v3 (ESP32-WROOM-32D) — Arduino IDE + USB DEBUG + VOL 0..100
-  --------------------------------------------------------------------
-  Zmiany:
-  - VOL ma zakres 0..100 (zamiast 0..30)
-  - Mapowanie do A2DP: 0..127
-  - Dodatkowo (opcjonalnie): BOOST 100..400 (% wzmocnienia cyfrowego próbek PCM)
-      BOOST 100 = bez zmian
-      BOOST 200 = 2x (może przesterować)
+  EVO-BT-TX v5 (ESP32-WROOM-32D) — AUTO 44.1/48k + RESAMPLE + BETTER SCAN + UART EVENTS
+  -----------------------------------------------------------------------------------
+  Co robi:
+  - Wykrywa częstotliwość WS/LRCLK (~44100 lub ~48000) na PIN_I2S_WS
+  - Gdy źródło = 44.1k: passthrough
+  - Gdy źródło = 48k: resampling 48k -> 44.1k (linear interpolation)
+  - Ring buffer PCM (żeby uniknąć blokowania i underrunów)
+  - GAP scan + EIR (lepsze nazwy urządzeń)
+  - Eventy po UART/USB: A2DP_CONN / A2DP_AUDIO / SRC_FS
+  - VOL 0..100 -> 0..127
+  - BOOST 100..400 (%), domyślnie 100
 
   Komendy:
     HELP, PING, GET/STATUS?
@@ -32,6 +35,9 @@ extern "C" {
   #include "nvs.h"
   #include "driver/i2s.h"
   #include "esp_gap_bt_api.h"
+  #include "esp_bt_main.h"
+  #include "esp_bt_device.h"
+  #include "esp_a2dp_api.h"
 }
 
 #include <stdarg.h>
@@ -41,14 +47,16 @@ static const int PIN_UART_RX = 16;
 static const int PIN_UART_TX = 17;
 static const uint32_t UART_BAUD = 115200;
 
-// I2S (podsłuch z S3, równolegle z PCM5102A)
+// I2S (podsłuch z S3)
 static const int PIN_I2S_BCLK = 26;
-static const int PIN_I2S_WS   = 25;
+static const int PIN_I2S_WS   = 25;  // LRCLK/WS - tu mierzymy Fs
 static const int PIN_I2S_DIN  = 22;
 
-// Audio: 48 kHz / 16-bit
-static const int AUDIO_SR = 48000;
+// audio format
 static const i2s_bits_per_sample_t AUDIO_BITS = I2S_BITS_PER_SAMPLE_16BIT;
+
+// A2DP output (stałe) — w praktyce ESP32 A2DP source lubi 44.1k
+static const int OUT_SR = 44100;
 // =====================================
 
 HardwareSerial CTRL(2);
@@ -83,13 +91,14 @@ static bool g_scanning = false;
 static String g_connMac = "";
 static String g_connName = "";
 
-// VOL: 0..100
+// VOL: 0..100 -> 0..127
 static int g_vol_ui = 100;
 static uint8_t g_vol_127 = 127;
 
-// BOOST: 100..400 (%)
-static int g_boost_pct = 400;
+// BOOST: 100..400 (%), domyślnie 100
+static int g_boost_pct = 100;
 
+// ===== Scan list =====
 struct Dev {
   esp_bd_addr_t bda{};
   int rssi = 0;
@@ -99,7 +108,105 @@ struct Dev {
 static Dev g_scan[25];
 static int g_scanCount = 0;
 
-// --------- Utils ----------
+// ===== Source sample rate detect =====
+enum SrcRate : uint8_t { SRC_UNKNOWN=0, SRC_44100=1, SRC_48000=2 };
+static volatile SrcRate g_srcRate = SRC_UNKNOWN;
+static volatile int g_srcHz = 0;
+
+// ISR counter
+static volatile uint32_t g_wsEdges = 0;
+
+// ===== Ring buffer PCM =====
+// przechowujemy stereo frames: L,R (int16,int16)
+// rozmiar w frames (nie w samplach)
+static const int RB_FRAMES = 8192; // 8192 frames ~ 8192/48k = 170 ms
+static int16_t rb[RB_FRAMES * 2];  // [L,R,L,R...]
+static volatile uint32_t rb_w = 0; // write index in frames
+static volatile uint32_t rb_r = 0; // read index in frames
+static portMUX_TYPE rb_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static inline uint32_t rb_count_frames(){
+  uint32_t w = rb_w, r = rb_r;
+  return (w >= r) ? (w - r) : (RB_FRAMES - (r - w));
+}
+
+static inline uint32_t rb_free_frames(){
+  // zostawiamy 1 frame wolny żeby odróżnić full/empty
+  return (RB_FRAMES - 1) - rb_count_frames();
+}
+
+static void rb_clear(){
+  portENTER_CRITICAL(&rb_mux);
+  rb_w = rb_r = 0;
+  portEXIT_CRITICAL(&rb_mux);
+}
+
+static bool rb_push_frames(const int16_t* framesLR, uint32_t frames){
+  bool ok = true;
+  portENTER_CRITICAL(&rb_mux);
+  uint32_t freeF = rb_free_frames();
+  if (frames > freeF){
+    // overflow: utnij nadmiar (lepsze niż blokowanie)
+    frames = freeF;
+    ok = false;
+  }
+  for(uint32_t i=0;i<frames;i++){
+    uint32_t wi = rb_w;
+    rb[wi*2 + 0] = framesLR[i*2 + 0];
+    rb[wi*2 + 1] = framesLR[i*2 + 1];
+    rb_w = (wi + 1) % RB_FRAMES;
+  }
+  portEXIT_CRITICAL(&rb_mux);
+  return ok;
+}
+
+static uint32_t rb_pop_frames(int16_t* outLR, uint32_t frames){
+  uint32_t got = 0;
+  portENTER_CRITICAL(&rb_mux);
+  uint32_t avail = rb_count_frames();
+  if (frames > avail) frames = avail;
+  for(uint32_t i=0;i<frames;i++){
+    uint32_t ri = rb_r;
+    outLR[i*2 + 0] = rb[ri*2 + 0];
+    outLR[i*2 + 1] = rb[ri*2 + 1];
+    rb_r = (ri + 1) % RB_FRAMES;
+    got++;
+  }
+  portEXIT_CRITICAL(&rb_mux);
+  return got;
+}
+
+// ===== Resampler state (48 -> 44.1) =====
+// phase w Q16 oznacza pozycję w wejściu (w frames)
+// step = input_sr / output_sr w Q16
+static uint32_t g_phase_q16 = 0;
+static uint32_t g_step_q16  = 0;
+
+// do interpolacji potrzebujemy dwóch kolejnych frames
+static bool rb_peek_two(int16_t &l0,int16_t &r0,int16_t &l1,int16_t &r1){
+  bool ok = false;
+  portENTER_CRITICAL(&rb_mux);
+  uint32_t avail = rb_count_frames();
+  if (avail >= 2){
+    uint32_t ri0 = rb_r;
+    uint32_t ri1 = (ri0 + 1) % RB_FRAMES;
+    l0 = rb[ri0*2 + 0]; r0 = rb[ri0*2 + 1];
+    l1 = rb[ri1*2 + 0]; r1 = rb[ri1*2 + 1];
+    ok = true;
+  }
+  portEXIT_CRITICAL(&rb_mux);
+  return ok;
+}
+
+static void rb_drop_frames(uint32_t frames){
+  portENTER_CRITICAL(&rb_mux);
+  uint32_t avail = rb_count_frames();
+  if (frames > avail) frames = avail;
+  rb_r = (rb_r + frames) % RB_FRAMES;
+  portEXIT_CRITICAL(&rb_mux);
+}
+
+// ====== Utils ======
 static String bdaToStr(const esp_bd_addr_t bda){
   char s[18];
   snprintf(s, sizeof(s), "%02X:%02X:%02X:%02X:%02X:%02X",
@@ -119,6 +226,14 @@ static void scanClear(){
   g_scanCount = 0;
 }
 
+static int scanFindByMac(const String& mac){
+  for(int i=0;i<g_scanCount;i++){
+    if (!g_scan[i].valid) continue;
+    if (bdaToStr(g_scan[i].bda).equalsIgnoreCase(mac)) return i;
+  }
+  return -1;
+}
+
 static void scanStore(const esp_bd_addr_t bda, int rssi, const String& name){
   for(int i=0;i<g_scanCount;i++){
     if (g_scan[i].valid && memcmp(g_scan[i].bda, bda, 6) == 0){
@@ -135,11 +250,11 @@ static void scanStore(const esp_bd_addr_t bda, int rssi, const String& name){
   g_scanCount++;
 }
 
-// --------- I2S ----------
+// ===== I2S init (slave RX) =====
 static void i2s_init_slave_rx(){
   i2s_config_t cfg = {};
   cfg.mode = (i2s_mode_t)(I2S_MODE_SLAVE | I2S_MODE_RX);
-  cfg.sample_rate = AUDIO_SR;
+  cfg.sample_rate = OUT_SR; // w SLAVE i tak liczy się zewnętrzny WS, ale zostawiamy sensowną wartość
   cfg.bits_per_sample = AUDIO_BITS;
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   cfg.communication_format = I2S_COMM_FORMAT_I2S;
@@ -162,47 +277,282 @@ static void i2s_init_slave_rx(){
   i2s_zero_dma_buffer(I2S_PORT);
 }
 
-// callback dla A2DP: pobiera dane audio
-static int32_t get_data(uint8_t *data, int32_t len){
-  size_t bytesRead = 0;
-  if (i2s_read(I2S_PORT, data, len, &bytesRead, portMAX_DELAY) != ESP_OK) return 0;
-  if (bytesRead == 0) return 0;
+// ===== WS ISR =====
+static void IRAM_ATTR ws_isr(){
+  g_wsEdges++;
+}
 
-  if (g_boost_pct != 100){
-    int16_t *s = (int16_t*)data;
-    int count = bytesRead / 2;
-    int gain_q10 = (g_boost_pct * 1024) / 100; // 100% = 1024
-    for(int i=0;i<count;i++){
-      int32_t v = (int32_t)s[i] * gain_q10;
-      v >>= 10;
-      if (v > 32767) v = 32767;
-      if (v < -32768) v = -32768;
-      s[i] = (int16_t)v;
+// ===== Source rate monitor task =====
+static TaskHandle_t g_rateTask = nullptr;
+
+static void reset_resampler_for(SrcRate r){
+  // wyczyść bufor żeby nie mieszać starych próbek w nowym trybie
+  rb_clear();
+  g_phase_q16 = 0;
+
+  if (r == SRC_48000){
+    // step = input_sr / output_sr w Q16
+    // (48000/44100) * 65536
+    g_step_q16 = (uint32_t)(((uint64_t)48000 << 16) / (uint32_t)OUT_SR);
+  } else {
+    g_step_q16 = 0;
+  }
+}
+
+static void rate_task(void *){
+  // prosta stabilizacja: wymagamy 2 takich samych odczytów pod rząd
+  SrcRate lastDec = SRC_UNKNOWN;
+  int stable = 0;
+
+  uint32_t lastEdges = 0;
+  uint32_t lastMs = millis();
+
+  for(;;){
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    uint32_t nowMs = millis();
+    uint32_t e = g_wsEdges;
+    uint32_t de = e - lastEdges;
+    uint32_t dt = nowMs - lastMs;
+    lastEdges = e;
+    lastMs = nowMs;
+
+    if (dt < 50){
+      continue;
+    }
+
+    // rising edges na WS: 1 na frame => ~ sample rate
+    float hz = (float)de * 1000.0f / (float)dt;
+    int ihz = (int)(hz + 0.5f);
+    g_srcHz = ihz;
+
+    SrcRate dec = SRC_UNKNOWN;
+    if (ihz > 43000 && ihz < 45500) dec = SRC_44100;
+    else if (ihz > 46500 && ihz < 49500) dec = SRC_48000;
+    else dec = SRC_UNKNOWN;
+
+    if (dec == lastDec && dec != SRC_UNKNOWN){
+      stable++;
+    } else {
+      stable = 0;
+      lastDec = dec;
+    }
+
+    // po 2 stabilnych oknach (czyli ok. 0.5s) przełącz tryb
+    if (stable >= 2 && dec != g_srcRate){
+      g_srcRate = dec;
+      reset_resampler_for(dec);
+      logF("EVT SRC_FS %dHz MODE=%s\n",
+           g_srcHz,
+           (dec==SRC_44100) ? "44100" : (dec==SRC_48000 ? "48000" : "UNKNOWN"));
+    }
+
+    // jeśli nie wykrywa nic sensownego przez dłużej, oznacz UNKNOWN
+    if (dec == SRC_UNKNOWN){
+      // nie czyścimy od razu żeby nie skakało, ale jeśli już jest UNKNOWN, to ok
+      // (zostawiamy ostatni tryb, bo niektóre źródła potrafią mieć krótkie dziury)
     }
   }
-
-  return (int32_t)bytesRead;
 }
 
-// --------- Discovery callbacks (z biblioteki) ----------
-static bool ssid_found_cb(const char *ssid, esp_bd_addr_t address, int rssi){
-  String name = ssid ? String(ssid) : String("");
-  scanStore(address, rssi, name);
-  logF("DEV %d %s RSSI=%d NAME=\"%s\"\n", g_scanCount-1, bdaToStr(address).c_str(), rssi, name.c_str());
-  return true;
-}
+// ===== PCM producer task (I2S -> ring buffer) =====
+static TaskHandle_t g_pcmTask = nullptr;
 
-static void discovery_state_cb(esp_bt_gap_discovery_state_t st){
-  if (st == ESP_BT_GAP_DISCOVERY_STARTED){
-    g_scanning = true;
-    logLn("SCAN START");
-  } else if (st == ESP_BT_GAP_DISCOVERY_STOPPED){
-    g_scanning = false;
-    logF("SCAN DONE COUNT=%d\n", g_scanCount);
+static void pcm_task(void *){
+  static uint8_t raw[1024]; // musi być wielokrotnością 4 bajtów (stereo 16-bit)
+  for(;;){
+    if (!g_btReady || g_mode == MODE_OFF){
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
+    size_t br = 0;
+    // krótki timeout żeby nie przywieszać
+    esp_err_t r = i2s_read(I2S_PORT, raw, sizeof(raw), &br, pdMS_TO_TICKS(20));
+    if (r != ESP_OK || br == 0){
+      continue;
+    }
+
+    // br bajtów => frames = br / 4 (L16+R16)
+    uint32_t frames = (uint32_t)(br / 4);
+
+    // BOOST (opcjonalny) na surowych próbkach zanim trafią do bufora
+    if (g_boost_pct != 100){
+      int16_t *s = (int16_t*)raw;
+      uint32_t count = br / 2;
+      int32_t gain_q10 = (g_boost_pct * 1024) / 100;
+      for(uint32_t i=0;i<count;i++){
+        int32_t v = (int32_t)s[i] * gain_q10;
+        v >>= 10;
+        if (v > 32767) v = 32767;
+        if (v < -32768) v = -32768;
+        s[i] = (int16_t)v;
+      }
+    }
+
+    rb_push_frames((int16_t*)raw, frames);
   }
 }
 
-// --------- NVS save/load ----------
+// ===== EIR name helper =====
+static String eirToName(uint8_t *eir){
+  if (!eir) return "";
+  uint8_t len = 0;
+  uint8_t *p = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &len);
+  if (!p) p = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &len);
+  if (p && len){
+    char name[64];
+    int n = (len < (sizeof(name)-1)) ? len : (sizeof(name)-1);
+    memcpy(name, p, n);
+    name[n] = 0;
+    return String(name);
+  }
+  return "";
+}
+
+// ===== GAP callback =====
+static void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param){
+  switch(event){
+    case ESP_BT_GAP_DISC_STATE_CHANGED_EVT: {
+      if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STARTED){
+        g_scanning = true;
+        logLn("SCAN START");
+      } else if (param->disc_st_chg.state == ESP_BT_GAP_DISCOVERY_STOPPED){
+        g_scanning = false;
+        logF("SCAN DONE COUNT=%d\n", g_scanCount);
+      }
+    } break;
+
+    case ESP_BT_GAP_DISC_RES_EVT: {
+      int rssi = 0;
+      String name = "";
+
+      for (int i=0; i<param->disc_res.num_prop; i++){
+        auto &p = param->disc_res.prop[i];
+        if (p.type == ESP_BT_GAP_DEV_PROP_RSSI){
+          rssi = *(int8_t*)p.val;
+        } else if (p.type == ESP_BT_GAP_DEV_PROP_EIR){
+          name = eirToName((uint8_t*)p.val);
+        }
+      }
+
+      scanStore(param->disc_res.bda, rssi, name);
+
+      String mac = bdaToStr(param->disc_res.bda);
+      int idx = scanFindByMac(mac);
+
+      logF("DEV %d %s RSSI=%d NAME=\"%s\"\n",
+           (idx >= 0 ? idx : 0),
+           mac.c_str(),
+           rssi,
+           name.c_str());
+    } break;
+
+    default:
+      break;
+  }
+}
+
+// ===== A2DP eventy =====
+static void on_conn_state(esp_a2d_connection_state_t state, void *){
+  const char* s =
+    (state==ESP_A2D_CONNECTION_STATE_DISCONNECTED) ? "DISCONNECTED" :
+    (state==ESP_A2D_CONNECTION_STATE_CONNECTING)   ? "CONNECTING" :
+    (state==ESP_A2D_CONNECTION_STATE_CONNECTED)    ? "CONNECTED" :
+    (state==ESP_A2D_CONNECTION_STATE_DISCONNECTING)? "DISCONNECTING" : "UNKNOWN";
+
+  logF("EVT A2DP_CONN %s MAC=%s NAME=\"%s\"\n",
+       s,
+       g_connMac.length()?g_connMac.c_str():"None",
+       g_connName.c_str());
+
+  if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED){
+    g_connMac = "";
+    g_connName = "";
+  }
+}
+
+static void on_audio_state(esp_a2d_audio_state_t state, void *){
+  const char* s =
+    (state==ESP_A2D_AUDIO_STATE_STOPPED)   ? "STOPPED" :
+    (state==ESP_A2D_AUDIO_STATE_STARTED)   ? "STARTED" :
+    (state==ESP_A2D_AUDIO_STATE_SUSPENDED) ? "SUSPENDED" : "UNKNOWN";
+
+  logF("EVT A2DP_AUDIO %s RB=%lu\n", s, (unsigned long)rb_count_frames());
+}
+
+// ===== A2DP data callback =====
+// A2DP prosi o len bajtów PCM (stereo 16-bit)
+static int32_t get_data(uint8_t *data, int32_t len){
+  // jeśli nie nadajemy, to cisza
+  if (!g_btReady || g_mode == MODE_OFF){
+    memset(data, 0, len);
+    return len;
+  }
+
+  // ile frames wyjściowych potrzeba
+  uint32_t outFrames = (uint32_t)(len / 4);
+  int16_t *out = (int16_t*)data;
+
+  SrcRate sr = g_srcRate;
+
+  // jeśli jeszcze nie wykryło, to próbuj zachować się bezpiecznie: cisza
+  if (sr == SRC_UNKNOWN){
+    memset(data, 0, len);
+    return len;
+  }
+
+  if (sr == SRC_44100){
+    // passthrough: pop tyle frames ile się da, resztę uzupełnij zerami
+    uint32_t got = rb_pop_frames(out, outFrames);
+    if (got < outFrames){
+      uint32_t missing = outFrames - got;
+      memset(out + got*2, 0, missing * 4);
+    }
+    return len;
+  }
+
+  // sr == SRC_48000: resampling 48 -> 44.1
+  // potrzebujemy dwóch kolejnych frames do interpolacji
+  for(uint32_t i=0;i<outFrames;i++){
+    // phase_q16 mówi ile wejściowych frames "przeszliśmy"
+    uint32_t idxInt = (g_phase_q16 >> 16);
+    uint32_t frac   = (g_phase_q16 & 0xFFFF);
+
+    // upewnij się, że w buforze jest idxInt+1
+    // najprościej: dropnij idxInt frames, potem peek 2
+    if (idxInt > 0){
+      rb_drop_frames(idxInt);
+      g_phase_q16 &= 0xFFFF; // zostaw tylko frac
+    }
+
+    int16_t l0,r0,l1,r1;
+    if (!rb_peek_two(l0,r0,l1,r1)){
+      // brak danych => cisza
+      out[i*2 + 0] = 0;
+      out[i*2 + 1] = 0;
+      // nie przesuwaj fazy za agresywnie, ale też nie stój w miejscu
+      g_phase_q16 += g_step_q16;
+      continue;
+    }
+
+    // linear interpolation
+    int32_t dl = (int32_t)l1 - (int32_t)l0;
+    int32_t dr = (int32_t)r1 - (int32_t)r0;
+
+    int32_t l = (int32_t)l0 + ((dl * (int32_t)frac) >> 16);
+    int32_t r = (int32_t)r0 + ((dr * (int32_t)frac) >> 16);
+
+    out[i*2 + 0] = (int16_t)l;
+    out[i*2 + 1] = (int16_t)r;
+
+    g_phase_q16 += g_step_q16;
+  }
+
+  return len;
+}
+
+// ===== NVS save/load =====
 static void cfg_save(){
   nvs_handle_t h;
   if (nvs_open("btcfg", NVS_READWRITE, &h) != ESP_OK){ logLn("ERR SAVE"); return; }
@@ -219,8 +569,9 @@ static void cfg_load(){
   nvs_handle_t h;
   if (nvs_open("btcfg", NVS_READONLY, &h) != ESP_OK) return;
 
-  int32_t m=0, v=50, b=100;
+  int32_t m=0, v=100, b=100;
   size_t len=0;
+
   if (nvs_get_i32(h, "mode", &m) == ESP_OK) g_mode = (Mode)m;
   if (nvs_get_i32(h, "vol", &v) == ESP_OK) g_vol_ui = (int)v;
   if (nvs_get_i32(h, "boost", &b) == ESP_OK) g_boost_pct = (int)b;
@@ -240,7 +591,7 @@ static void cfg_load(){
   if (g_boost_pct > 400) g_boost_pct = 400;
 }
 
-// --------- BT start (raz) ----------
+// ===== BT start (raz) =====
 static void ensureBtStarted(){
   if (g_btReady) return;
 
@@ -250,27 +601,51 @@ static void ensureBtStarted(){
     nvs_flash_init();
   }
 
+  // WS interrupt (frequency detect)
+  pinMode(PIN_I2S_WS, INPUT);
+  attachInterrupt(digitalPinToInterrupt(PIN_I2S_WS), ws_isr, RISING);
+
   i2s_init_slave_rx();
 
+  // GAP scan + names
+  esp_bt_gap_register_callback(gap_cb);
+
+  // A2DP
   a2dp.set_local_name("EVO-BT-TX");
   a2dp.set_data_callback(get_data);
   a2dp.set_auto_reconnect(false);
-  a2dp.set_ssid_callback(ssid_found_cb);
-  a2dp.set_discovery_mode_callback(discovery_state_cb);
+  a2dp.set_on_connection_state_changed(on_conn_state);
+  a2dp.set_on_audio_state_changed(on_audio_state);
 
   a2dp.start();
   a2dp.set_volume(g_vol_127);
 
+  rb_clear();
+  g_srcRate = SRC_UNKNOWN;
+  g_srcHz = 0;
+
+  // tasks
+  xTaskCreatePinnedToCore(rate_task, "rate_task", 4096, nullptr, 2, &g_rateTask, 1);
+  xTaskCreatePinnedToCore(pcm_task,  "pcm_task",  4096, nullptr, 2, &g_pcmTask,  1);
+
   g_btReady = true;
 }
 
-// --------- actions ----------
+// ===== actions =====
 static void status_send(){
-  logF("STATE BT=%s MODE=%s VOL=%d BOOST=%d SCAN=%d CONN=%d MAC=%s NAME=\"%s\"\n",
+  const char* sr =
+    (g_srcRate==SRC_44100) ? "44100" :
+    (g_srcRate==SRC_48000) ? "48000" : "UNKNOWN";
+
+  logF("STATE BT=%s MODE=%s VOL=%d(127=%d) BOOST=%d SRC=%s(%dHz) RB=%lu SCAN=%d CONN=%d MAC=%s NAME=\"%s\"\n",
     g_btReady ? "ON":"OFF",
     g_mode==MODE_OFF?"OFF":(g_mode==MODE_TX?"TX":"AUTO"),
     g_vol_ui,
+    (int)g_vol_127,
     g_boost_pct,
+    sr,
+    g_srcHz,
+    (unsigned long)rb_count_frames(),
     g_scanning ? 1:0,
     g_connMac.length()?1:0,
     g_connMac.length()?g_connMac.c_str():"None",
@@ -298,16 +673,20 @@ static void scan_start(){
 
 static void connect_mac(const String& mac){
   ensureBtStarted();
+
   esp_bd_addr_t bda{};
   if (!parseMac(mac, bda)){
     logLn("ERR CONNECT MAC");
     return;
   }
+
+  int idx = scanFindByMac(mac);
+  if (idx >= 0) g_connName = g_scan[idx].name; else g_connName = "";
+
   bool ok = a2dp.connect_to(bda);
   if (ok){
     g_connMac = mac;
-    g_connName = "";
-    logF("OK CONNECT %s\n", mac.c_str());
+    logF("OK CONNECT %s NAME=\"%s\"\n", mac.c_str(), g_connName.c_str());
   } else {
     logLn("ERR CONNECT");
   }
@@ -319,8 +698,8 @@ static void connect_idx(int idx){
     return;
   }
   String mac = bdaToStr(g_scan[idx].bda);
-  connect_mac(mac);
   g_connName = g_scan[idx].name;
+  connect_mac(mac);
 }
 
 static void disconnect_bt(){
@@ -347,11 +726,12 @@ static void paired_list(){
   logF("PAIRED DONE COUNT=%d\n", n);
 }
 
-// --------- DELPAIRED in background ----------
+// ===== DELPAIRED =====
 static TaskHandle_t g_delTask = nullptr;
 
 static void delpaired_task(void *){
   ensureBtStarted();
+
   a2dp.disconnect();
   if (g_scanning){
     esp_bt_gap_cancel_discovery();
@@ -399,7 +779,7 @@ static void delpaired_all_async(){
   xTaskCreatePinnedToCore(delpaired_task, "delpaired", 4096, nullptr, 1, &g_delTask, 1);
 }
 
-// --------- cmd parser ----------
+// ===== cmd parser =====
 static void help_print(){
   logLn("CMDS: HELP, PING, GET, STATUS?, BT ON, BT OFF, MODE OFF|TX|AUTO, VOL 0..100, BOOST 100..400, SCAN, CONNECT <idx|MAC>, DISCONNECT, PAIRED?, DELPAIRED ALL, SAVE, DBG 0|1, HARDRESET");
 }
@@ -468,12 +848,12 @@ static void handle_cmd(String s, const char* src){
   if (s=="DELPAIRED ALL"){ delpaired_all_async(); return; }
   if (s=="SAVE"){ cfg_save(); return; }
 
-  if (s=="HARDRESET"){ logLn("OK HARDRESET"); delay(50); ESP.restart(); }
+  if (s=="HARDRESET"){ logLn("OK HARDRESET"); delay(50); ESP.restart(); return; }
 
   logLn("ERR UNKNOWN");
 }
 
-// --------- read line from stream ----------
+// ===== read line =====
 static bool readLineFrom(Stream& st, String& buf, String& outLine){
   while (st.available()){
     char c = (char)st.read();
@@ -493,7 +873,7 @@ void setup(){
   Serial.begin(115200);
   CTRL.begin(UART_BAUD, SERIAL_8N1, PIN_UART_RX, PIN_UART_TX);
 
-  logLn("READY EVO-BT-TX");
+  logLn("READY EVO-BT-TX v5");
 
   cfg_load();
   ensureBtStarted();

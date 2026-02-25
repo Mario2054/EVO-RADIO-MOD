@@ -40,6 +40,9 @@ void  eq_analyzer_enable_test_generator(bool en);
 // Ustawienia specjalne dla FLAC
 void  eq_analyzer_set_flac_mode(bool enable);
 
+// Ustawienia specjalne dla SDPlayer (3x większa dynamika)
+void  eq_analyzer_set_sdplayer_mode(bool enable);
+
 // ======================= NOWE FUNKCJE OPTYMALIZACJI =======================
 
 // Statystyki wydajności

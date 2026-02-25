@@ -103,22 +103,19 @@ void applyToAudio(){
     highWeight += highWeights[i-11];
   }
   
-  // Oblicz ważone średnie i ZWIĘKSZ WZMOCNIENIE x8.0 (aby było równe z 3-punktowym EQ)
-  // EQ16 po konwersji jest ~8x cichsze niż EQ3, więc mnożymy aby wyrównać poziomy
-  const float GAIN_MULTIPLIER = 8.0f; // Mnożnik wzmocnienia - wyrównanie z EQ3
-  const int8_t GAIN_OFFSET = 0;       // Bez offsetu - czysta korekcja wzmocnienia
+  // Oblicz ważone średnie
+  int8_t lowGain = (int8_t)(lowSum / lowWeight);
+  int8_t midGain = (int8_t)(midSum / midWeight);
+  int8_t highGain = (int8_t)(highSum / highWeight);
   
-  int8_t lowGain = (int8_t)((lowSum / lowWeight) * GAIN_MULTIPLIER) + GAIN_OFFSET;
-  int8_t midGain = (int8_t)((midSum / midWeight) * GAIN_MULTIPLIER) + GAIN_OFFSET;
-  int8_t highGain = (int8_t)((highSum / highWeight) * GAIN_MULTIPLIER) + GAIN_OFFSET;
-  
-  // Ograniczenie do zakresu [-40..+20] dB (rozszerzony dla większego zakresu regulacji)
-  if(lowGain > 20) lowGain = 20;
-  if(lowGain < -40) lowGain = -40;
-  if(midGain > 20) midGain = 20;
-  if(midGain < -40) midGain = -40;
-  if(highGain > 20) highGain = 20;
-  if(highGain < -40) highGain = -40;
+  // Ograniczenie do zakresu [-40..+6] dB zgodnie z dokumentacją setTone()
+  // Dodatkowo ograniczamy do [-12..+6] dla bezpieczeństwa
+  if(lowGain > 6) lowGain = 6;
+  if(lowGain < -12) lowGain = -12;
+  if(midGain > 6) midGain = 6;
+  if(midGain < -12) midGain = -12;
+  if(highGain > 6) highGain = 6;
+  if(highGain < -12) highGain = -12;
   
   s_audio->setTone(lowGain, midGain, highGain);
   
@@ -246,9 +243,6 @@ void EQ16_init(void) {
     }
     
     Serial.println("EQ16_init() - 16-Band Equalizer initialized");
-    
-    // Załaduj zapisane ustawienia z SD card (jeśli istnieją)
-    EQ16_loadFromSD();
 }
 
 void EQ16_enable(bool enabled) {
@@ -457,7 +451,6 @@ void EQ16_loadFromSD(void) {
         for (uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
             APMS_EQ16::setBand(i, 0);
         }
-        APMS_EQ16::applyToAudio();  // Zastosuj domyślne ustawienia
         return;
     }
     
@@ -477,10 +470,7 @@ void EQ16_loadFromSD(void) {
             Serial.printf("Loaded Band %d: %d\n", i, value);
         }
         myFile.close();
-        
-        // WAŻNE: Zastosuj załadowane ustawienia do audio!
-        APMS_EQ16::applyToAudio();
-        Serial.println("DEBUG: EQ16 settings loaded and applied to audio successfully");
+        Serial.println("DEBUG: EQ16 settings loaded successfully");
     } else {
         Serial.println("ERROR: Failed to open /eq16.txt for reading");
     }
@@ -544,17 +534,16 @@ void EQ16_loadPreset(uint8_t presetId) {
         if (presetId == 8) {
             // Custom - załaduj z SD (plik eq16.txt)
             Serial.println("EQ16: Loading CUSTOM preset from SD card...");
-            EQ16_loadFromSD();  // Załaduje zapisane ustawienia użytkownika + applyToAudio()
+            EQ16_loadFromSD();  // Załaduje zapisane ustawienia użytkownika
         } else {
             // Normalny preset
-            Serial.printf("EQ16: Applying preset %d bands...\n", presetId);
             for(uint8_t i = 0; i < APMS_EQ16::BANDS; i++) {
                 APMS_EQ16::setBand(i, presets[presetId][i]);
-                Serial.printf("  Band %d = %ddB\n", i, presets[presetId][i]);
             }
             
             // ZASTOSUJ ZMIANY DO AUDIO - wywołaj funkcję z namespace
-            APMS_EQ16::applyToAudio();
+            using namespace APMS_EQ16;
+            applyToAudio();
             
             EQ16_saveToSD();  // Automatyczny zapis po załadowaniu presetu
         }

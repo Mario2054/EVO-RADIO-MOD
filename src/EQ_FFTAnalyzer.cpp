@@ -25,16 +25,17 @@ typedef struct {
 static QueueHandle_t g_q = nullptr;
 static TaskHandle_t  g_task = nullptr;
 
-// Kontrola częstotliwości update (167Hz - 5x szybciej) i adaptive load
+// Kontrola częstotliwości update (20Hz - zoptymalizowane dla FLAC streaming)
 static uint32_t g_lastUIUpdateMs = 0;
-static uint32_t g_uiUpdateIntervalMs = 6; // ~167Hz update rate (zmienna) - 5x szybciej
+static uint32_t g_uiUpdateIntervalMs = 50; // ~20Hz update rate (oszczędność CPU dla audio)
 static uint32_t g_droppedFrames = 0;
-static const uint8_t g_maxQueueLength = 3; // maksymalna długość kolejki przed drop
+static const uint8_t g_maxQueueLength = 2; // zmniejszona długość kolejki (oszczędność RAM)
 
 static volatile bool g_enabled = false;
 static volatile bool g_runtimeActive = false;
 static volatile bool g_testGen = false;
 static volatile bool g_flac_mode = false;
+static volatile bool g_sdplayer_mode = false; // Tryb SDPlayer - 3x większa dynamika
 
 static volatile uint32_t g_sr_hz = 44100;         // wejściowy SR
 static volatile uint32_t g_sr_eff = 22050;        // efektywny SR po downsample
@@ -182,7 +183,8 @@ static void analyzer_task(void*){
 
       // przeskaluj względem ref (AGC) i pasma - zwiększona dynamika
       // Dla FLAC używamy wyższego współczynnika dynamiki
-      float dynamic_scale = g_flac_mode ? 320.0f : 220.0f;
+      // Dla SDPlayer używamy 3x niższego współczynnika (3x większa dynamika)
+      float dynamic_scale = g_sdplayer_mode ? 73.0f : (g_flac_mode ? 320.0f : 220.0f);
       float v = (mag / (g_ref * dynamic_scale)) * kBandGain[b];
       raw[b] = compress_level(v);
     }
@@ -446,5 +448,14 @@ void eq_analyzer_set_flac_mode(bool enable) {
     Serial.println("[FFT ANALYZER] FLAC mode enabled - increased dynamics");
   } else {
     Serial.println("[FFT ANALYZER] Standard mode enabled");
+  }
+}
+
+void eq_analyzer_set_sdplayer_mode(bool enable) {
+  g_sdplayer_mode = enable;
+  if(enable) {
+    Serial.println("[FFT ANALYZER] SDPlayer mode enabled - 3x dynamics boost");
+  } else {
+    Serial.println("[FFT ANALYZER] SDPlayer mode disabled");
   }
 }

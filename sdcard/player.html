@@ -11,11 +11,32 @@
     <h2>SD Player</h2>
     <div id="path">/</div>
     <div id="status">Status: --</div>
+    
+    <!-- PANEL INFORMACYJNY (jak Styl 8 SDPlayer) -->
+    <div id="infoPanel" class="info-panel">
+      <div class="info-title" id="trackTitle">-</div>
+      <div class="info-album" id="trackAlbum">Album: -</div>
+      <div class="info-tech">
+        <span id="codec">-</span> | 
+        <span id="bitrate">0kbps</span> | 
+        <span id="samplerate">0kHz</span> | 
+        <span id="bps">0bit</span>
+      </div>
+      <div class="info-time">
+        <span id="currentTime">00:00</span> / <span id="totalTime">00:00</span>
+      </div>
+    </div>
+    
     <div class="row">
       <button id="btnUp">⬅︎ Up</button>
       <button id="btnRoot">Root</button>
-      <button id="btnStop">Stop</button>
       <button id="btnRefresh">Refresh</button>
+    </div>
+    <div class="controls">
+      <button id="btnPrev">⏮️ Prev</button>
+      <button id="btnPause">⏸️ Pause</button>
+      <button id="btnNext">⏭️ Next</button>
+      <button id="btnStop">⏹️ Stop</button>
     </div>
   </header>
 

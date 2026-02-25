@@ -1,17 +1,13 @@
 // ################################################################################################################### //
 // Evo Internet Radio                                                                                                  //
 // ################################################################################################################### //
-// Robgold 2025                                                                                                        //
+// Robgold 2026, Made in Poland                                                                                        //
 // Source -> https://github.com/dzikakuna/ESP32_radio_evo3/tree/main/src/ESP32_radio_evo3.19                           //
 // ################################################################################################################### //
 //                                                                                                                     //
 // Compilator: Arduino, Platformio                                                                                     //
-// Espressif ESPcore32-s3:                      3.2.0 (works on newer but without modified libs for FLAC files)        //
-// ESP32-audioI2S by schreibfaul1:              3.4.4 (2026-02-02)                                                     //
-//   - Źródło: https://github.com/schreibfaul1/ESP32-audioI2S.git                                                      //
-//   - Wersja: 3.4.4+sha.674c64a (zablokowana na tę wersję)                                                            //
-//   - Equalizer: Konwersja 16-pasm -> 3-punkty (Low/Mid/High) z wagami                                                //
-//   - Zobacz: INTEGRACJA_AUDIO_LIB.md i PRZEWODNIK_EQ16.md                                                            //
+// ESP32 by Espressif:                          3.3.3 (works on newer but without modified libs for FLAC files)        //
+// ESP32-audioI2S-master by schreibfaul1:       3.4.4g with commits 22.01.2026, FLAC 24bit is working!                 //
 // ESP Async WebServer:                         3.9.1                                                                  //
 // Async TCP:                                   3.4.9                                                                  // 
 // ezButton:                                    1.0.6                                                                  //
@@ -21,6 +17,7 @@
 
 #include "Arduino.h"           // Standardowy nagłówek Arduino, który dostarcza podstawowe funkcje i definicje
 #include <WiFiManager.h>       // Biblioteka do zarządzania konfiguracją sieci WiFi, opis jak ustawić połączenie WiFi przy pierwszym uruchomieniu jest opisany tu: https://github.com/tzapu/WiFiManager
+#include "Audio.h"             // ESP32-audioI2S 3.4.4 - Stabilna wersja audio z pełnym wsparciem dla ESP32/ESP32-S3
 #include "SPI.h"               // Biblioteka do obsługi komunikacji SPI
 #include "FS.h"                // Biblioteka do obsługi systemu plików
 #include <U8g2lib.h>           // Biblioteka do obsługi wyświetlaczy
@@ -33,125 +30,113 @@
 #include <AsyncTCP.h>          // Bliblioteka TCP dla serwera web
 #include <Update.h>            // Blibioteka dla aktulizacji OTA
 #include <ESPmDNS.h>           // Blibioteka mDNS dla ESP
-#include "Audio.h"             // Local Audio class
-#include "EQ_AnalyzerDisplay.h"  // FFT analyzer (styles 5/6)
-#include "EQ_FFTAnalyzer.h"    // FFT analyzer functions
-#include "EQ16_GraphicEQ.h"     // 16-Band Graphic Equalizer
-#include "SDPlayer/SDPlayerOLED.h"   // SD Player with OLED display
-#include "SDPlayer/SDPlayerWebUI.h"  // SD Player Web Interface
-#include "bt/BTWebUI.h"             // Bluetooth Web Interface
-// #include "bt/BT_KCX_Module.h"      // KCX Bluetooth Emitter/Receiver Module (ZAŚLEPKA)
-
-// Forward declarations
-void displayEqualizer();
-void saveConfig();
 
 #include "soc/rtc_cntl_reg.h"   // Biblioteki ESP aby móc zrobic pełny reset 
 #include "soc/rtc_cntl_struct.h"// Biblioteki ESP aby móc zrobic pełny reset 
 #include <esp_sleep.h>
 #include "esp_system.h"
 
-#include "rom/gpio.h"  // Biblioteka do mapowania pinu CS_SD
+#include "rom/gpio.h"     // Biblioteka do mapowania pinu CS_SD
 
-// CPU Monitoring includes
-#include "freertos/task.h"
-#include "esp_system.h"
-#include "esp_timer.h"
+#include "LittleFS.h"
+#include "SD.h"
 
-// CPU Usage monitoring variables
-static unsigned long lastCpuCheck = 0;
-static TaskHandle_t cpuMonitorTask = NULL;
+// =============== INTEGRACJA MODUŁÓW ===============
+// SDPlayer - odtwarzacz plików z karty SD
+#include "SDPlayer/SDPlayerOLED.h"
+#include "SDPlayer/SDPlayerWebUI.h"
 
-// CPU Usage monitoring functions - SIMPLIFIED VERSION
-void printCpuUsage() {
-    // Simple memory monitoring only
-    Serial.printf("Free Heap: %d bytes | Free PSRAM: %d bytes\n", 
-                  ESP.getFreeHeap(), ESP.getFreePsram());
-}
+// SDRecorder - nagrywanie strumienia radiowego
+#include "SDRecorder/SDRecorder.h"
 
-void cpuMonitorTaskFunc(void *parameter) {
-    while (true) {
-        printCpuUsage();
-        vTaskDelay(pdMS_TO_TICKS(5000)); // Co 5 sekund
-    }
-}
+// Analyzer - analizator spektrum FFT
+#include "EQ_FFTAnalyzer.h"
+#include "EQ_AnalyzerDisplay.h"
 
-void startCpuMonitoring() {
-    if (cpuMonitorTask == NULL) {
-        xTaskCreatePinnedToCore(
-            cpuMonitorTaskFunc,   // Task function
-            "CPU_Monitor",        // Task name
-            4096,                 // Stack size increased to 4KB
-            NULL,                 // Parameter
-            1,                    // Priority
-            &cpuMonitorTask,      // Task handle
-            1                     // Core (1 = Core 1)
-        );
-        Serial.println("CPU Monitoring started on Core 1");
-    }
-}
+// Equalizer 16-band - graficzny equalizer 16-pasmowy
+#include "APMS_GraphicEQ16.h"
 
-void stopCpuMonitoring() {
-    if (cpuMonitorTask != NULL) {
-        vTaskDelete(cpuMonitorTask);
-        cpuMonitorTask = NULL;
-        Serial.println("CPU Monitoring stopped");
-    }
-}
+// Bluetooth - moduł BT UART
+#include "bt/BTWebUI.h"
 
-// Deklaracja wersji oprogramowania i nazwy hosta widocznego w routerze oraz na ekranie OLED i stronie www
-#define softwareRev "v3.19.53"  // Wersja oprogramowania radia
+// WiFi Animation - animacja gwiazdek podczas łączenia
+#include "wifi_animation.h"
+
+// VU Style 11 - analog VU meter
+#include "vu_style11.h"
+// ==================================================
+
+// --------------- DEFINICJA WERSJI RADIA i NAZWT HOSTA ---------------
+#define softwareRev "v3.19.70"  // Wersja oprogramowania radia
 #define hostname "evoradio"   // Definicja nazwy hosta widoczna na zewnątrz
 
-// Definicja pinow czytnika karty SD
+// --------------- CZYTNIK KART SD (Opcjonalny) ---------------
 #define SD_CS 47    // Pin CS (Chip Select) dla karty SD wybierany jako interfejs SPI
 #define SD_SCLK 45  // Pin SCK (Serial Clock) dla karty SD
 #define SD_MISO 21  // Pin MISO (Master In Slave Out) dla karty SD
 #define SD_MOSI 48  // pin MOSI (Master Out Slave In) dla karty SD
 
 
-//<-----TUTAJ WŁĄCZAMY KARTE SD / pamiec SPIFSS oraz drugi enkoder ------->
-#define USE_SD  //odkomentuj dla karty SD
-//#define twoEncoders // odkomentuj dla drugiego enkodera
-//<----------------------------------------------------------------------->
-const bool f_powerOffAnimation = 0; // Animacja przy power OFF
+//--------------- KONFIGURACJA ---------------
+//Tutaj włączamy karte SD / pamiec SPIFSS. LittleFS, drugi enkoder, rozjanianie logo, animacje power off
 
-#ifdef USE_SD
-  #include "SD.h"
-  #define STORAGE SD
-  #define STORAGE_BEGIN() SD.begin(SD_CS, customSPI)
-  const bool useSD = true;
-  //#define SD_LED 17          // LED - sygnalizacja CS, aktywność karty SD, klon pinu uzyteczny w przypadku uzywania tylnego czytnika SD na PCB
+#define USE_SD  //odkomentuj dla karty SD , zostawiamy w przypadku AUTOSTORAGE
+//#define twoEncoders // odkomentuj dla drugiego enkodera
+// AUTOSTORAGE jest teraz zdefiniowane w platformio.ini build_flags (-DAUTOSTORAGE)
+const bool f_logoSlowBrightness = 1; 
+
+
+
+// ------ AUTO WYKRYWANIE STORAGE - Karta SD / LittleFS -----
+#ifdef AUTOSTORAGE
+  #define STORAGE (*_storage)
+  bool initStorage();
+  bool useSD = false;
+  const char* storageTextName = nullptr;
+  fs::FS* _storage = nullptr;
 #else
-  #include "SPIFFS.h"
-  #define STORAGE SPIFFS
-  #define STORAGE_BEGIN() SPIFFS.begin(true)
-  const bool useSD = false;
+
+  #ifdef USE_SD
+    #define STORAGE SD
+    #define STORAGE_BEGIN() SD.begin(SD_CS, customSPI)
+    const bool useSD = true;
+    //#define SD_LED 17          // LED - sygnalizacja CS, aktywność karty SD, klon pinu uzyteczny w przypadku uzywania tylnego czytnika SD na PCB
+    //static const char storageTextName[] = "SD";
+    #define storageTextName "SD"
+  #else
+    #define STORAGE LittleFS
+    #define STORAGE_BEGIN() LittleFS.begin(true)  // Dla LittleFS, stabilniej działa i nie przerywa audio
+    const bool useSD = false;
+    #define storageTextName "LittleFS"
+  #endif
+
 #endif
  
-// Definicja pinow dla wyswietlacza OLED 
+// --------------- OLED Wyswietlacz - definicja pinow ---------------
 #define SPI_MOSI_OLED 39  // Pin MOSI (Master Out Slave In) dla interfejsu SPI OLED
 #define SPI_MISO_OLED 0   // Pin MISO (Master In Slave Out) brak dla wyswietlacza OLED
 #define SPI_SCK_OLED 38   // Pin SCK (Serial Clock) dla interfejsu SPI OLED
 #define CS_OLED 42        // Pin CS (Chip Select) dla interfejsu OLED
 #define DC_OLED 40        // Pin DC (Data/Command) dla interfejsu OLED
-#define RESET_OLED -1 //41//-1 //41     // Pin Reset dla interfejsu OLED
+#define RESET_OLED 41     //-1 //41     // Pin Reset dla interfejsu OLED
 
 // Rozmiar wysweitlacz OLED (potrzebny do wyświetlania grafiki)
 #define SCREEN_WIDTH 256        // Szerokość ekranu w pikselach
 #define SCREEN_HEIGHT 64        // Wysokość ekranu w pikselach
 
-// Definicja pinow dla przetwornika PCM5102A
+// --------------- PCM5102A - definicja pinow przetwornika ---------------
 #define I2S_DOUT 13             // Podłączenie do pinu DIN na DAC
 #define I2S_BCLK 12             // Podłączenie po pinu BCK na DAC
-#define I2S_LRC 14              // Podłączenie do pinu LCK na DAC
+#define I2S_LRC 14              // Podłączenie do pinu LCK na DAC  
 
-// Enkoder 2 - jesli jedyny to Volume/Stacje/Banki/PowerOff/PowerOn jesli z Enkoderem1 to Stacje/Banki
+// --------------- ENCODER 2 (MAIN) ---------------
+// Jesli jedyny to Volume/Stacje/Banki/PowerOff/PowerOn jesli z Enkoderem1 to Stacje/Banki
 #define CLK_PIN2 10             // Podłączenie z pinu 10 do CLK na enkoderze
 #define DT_PIN2 11              // Podłączenie z pinu 11 do DT na enkoderze lewym
 #define SW_PIN2 1               // Podłączenie z pinu 1 do SW na enkoderze lewym (przycisk)
 
-// Enkoder 1 - jesli zdefinionway to Volume/Mute/PowerOff/PowerOn
+// --------------- ENCODER 1 (dodatkowy) ---------------
+// Jesli zdefinionway to Volume/Mute/PowerOff/PowerOn
 #ifdef twoEncoders
   #define CLK_PIN1 6              // Podłączenie z pinu 6 do CLK na enkoderze prawym
   #define DT_PIN1 5               // Podłączenie z pinu 5 do DT na enkoderze prawym
@@ -161,7 +146,6 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
   int CLK_state1 = 0;
   int prev_CLK_state1 = 0;
   int buttonLongPressTime1 = 150;
-  //int buttonShortPressTime1 = 500;
   int buttonSuperLongPressTime1 = 2000;
   bool action4Taken = false;        // Flaga Akcji 4 - enkoder 1, powerOFF
   bool action5Taken = false;        // Flaga Akcji 5 - enkoder 1, Menu Bank
@@ -169,14 +153,16 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
   const bool use2encoders = false;
 #endif
 
-// IR odbiornik podczerwieni 
+// --------------- IR odbiornik podczerwieni ---------------
 #define recv_pin 15
 
-// Przycisk Power
-#define SW_POWER 17
-#define STANDBY_LED 16
+// --------------- PRZYCISK POWER i LEDow ---------------
+#define SW_POWER 8        // Dedykowany przycisk Power
+#define STANDBY_LED 17    // LED do informowania o trybie Standby
+#define IR_LED 17         // Derfinicja pinu LED pokazujacego aktywność odbiornika IR
+//
 
-//#define f_displayPowerOffClock 1   // Przeniesione do ustawien na karte SD
+
 #define WAKEUP_INTERVAL_US (60ULL * 1000000ULL) // 1 minuta
 
 // definicja dlugosci ilosci stacji w banku, dlugosci nazwy stacji w PSRAM/EEPROM, maksymalnej ilosci plikow audio (odtwarzacz)
@@ -184,26 +170,22 @@ const bool f_powerOffAnimation = 0; // Animacja przy power OFF
 #define STATION_NAME_LENGTH 220  // Nazwa stacji wraz z bankiem i numerem stacji do wyświetlenia w pierwszej linii na ekranie
 #define MAX_FILES 100            // Maksymalna liczba plików lub katalogów w tablicy directoriesz
 #define bank_nr_max 17           // Numer jaki może osiągnac maksymalnie zmienna bank_nr czyli ilość banków
-// Konfiguracja stylów analizatora
-uint8_t analyzerStylesMode = 2;     // 0=0-4-5, 1=0-4-6, 2=0-4-5-6-7-8-9 (wszystkie)
-uint8_t analyzerCurrentPreset = 0;  // Aktualny preset analizatora (0-4)
-// Maksymalny numer stylu ekranu (dynamicznie obliczany na podstawie analyzerStylesMode)
-uint8_t displayModeMax = 10;         // WSZYSTKIE style 0..10 z analizatorem FFT i Floating Peaks
+#define displayModeMax 10         // Ogrniczenie maksymalnej ilosci trybów wyswietlacza OLED
 
 // DEBUG PRINTS - ON/OFF
 #define f_debug_web_on 0         // Flaga właczenia wydruku debug_web
 #define f_debug_on 0             // Flaga właczenia wydruku debug
 
 //String STATIONS_URL1 = "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank01.txt";   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL1 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank01.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL2 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank02.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL3 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank03.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL4 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank04.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL5 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank05.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL6 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank06.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL7 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank07.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL8 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank08.txt"   // Adres URL do pliku z listą stacji radiowych
-#define STATIONS_URL9 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank09.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL1  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank01.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL2  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank02.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL3  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank03.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL4  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank04.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL5  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank05.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL6  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank06.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL7  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank07.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL8  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank08.txt"   // Adres URL do pliku z listą stacji radiowych
+#define STATIONS_URL9  "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank09.txt"   // Adres URL do pliku z listą stacji radiowych
 #define STATIONS_URL10 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank10.txt"  // Adres URL do pliku z listą stacji radiowych
 #define STATIONS_URL11 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank11.txt"  // Adres URL do pliku z listą stacji radiowych
 #define STATIONS_URL12 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank12.txt"  // Adres URL do pliku z listą stacji radiowych
@@ -214,11 +196,21 @@ uint8_t displayModeMax = 10;         // WSZYSTKIE style 0..10 z analizatorem FFT
 #define STATIONS_URL17 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank17.txt"  // Adres URL do pliku z listą stacji radiowych
 #define STATIONS_URL18 "https://raw.githubusercontent.com/dzikakuna/ESP32_radio_streams/main/bank18.txt"  // Adres URL do pliku z listą stacji radiowych
 
+
+// --------------- DEFINICJA TEKSTOW ---------------
 #define SLEEP_STRING "SLEEP "
 #define SLEEP_STRING_VAL " MINUTES"
 #define SLEEP_STRING_OFF "OFF"
 
-// ############### DEFINICJA DLA PILOTa IR w standardzie NEC - przeniesiona do pliku txt na karcie ############### //
+
+// --------------- KOMUNIKACJA MODUŁU RADIA PO RS232 ---------------
+//#define SERIALCOM        // Dekalarcja kompilacji plikow integracji jako moduł z komunikacja po RS232
+#ifdef SERIALCOM
+#include "serialcom.h"   // Integracja jako moduł z komunikacja po RS232
+#endif
+
+
+// --------------- Zmienne  DLA PILOTa IR w standardzie NEC - przeniesiona do pliku txt ---------------
 uint16_t rcCmdVolumeUp = 0;   // Głosnosc +
 uint16_t rcCmdVolumeDown = 0; // Głośnosc -
 uint16_t rcCmdArrowRight = 0; // strzałka w prawo - nastepna stacja
@@ -245,16 +237,54 @@ uint16_t rcCmdKey6 = 0;       // Przycisk "6"
 uint16_t rcCmdKey7 = 0;       // Przycisk "7"
 uint16_t rcCmdKey8 = 0;       // Przycisk "8"
 uint16_t rcCmdKey9 = 0;       // Przycisk "9"
-uint16_t rcCmdPower = 0;       // Przycisk Power
-uint16_t rcCmdBT = 0;          // Przycisk Bluetooth menu
+uint16_t rcCmdPower = 0;      // Przycisk Power
+uint16_t rcCmdYellow = 0;     // Przycisk żółty
+uint16_t rcCmdBlue = 0;       // Przycisk niebieski - REC (nagrywanie)
+uint16_t rcCmdBT = 0;         // Przycisk BT
+uint16_t lastIrCode = 0;      // Ostatni kod IR (dla combo)
+
+// Double-click variables for seek/track change
+bool waitingForSecondClick = false;    // Flaga oczekiwania na drugi klik
+unsigned long firstClickTime = 0;      // Czas pierwszego kliknięcia
+
+// Double-click variables for AUD button (SDPlayer activation)
+bool waitingForSecondAudClick = false; // Flaga oczekiwania na drugie naciśnięcie AUD
+unsigned long firstAudClickTime = 0;   // Czas pierwszego naciśnięcia AUD
+int lastClickDirection = 0;            // Kierunek kliknięcia (+1 prawo, -1 lewo)
+
+// IR Track Selection dla SDPlayer
+int irRequestedTrackNumber = 0;        // Numer utworu wybrany przez IR (1-100) 
+bool irTrackSelectionRequest = false;  // Flaga żądania wyboru utworu przez IR
+
+// ===== SYSTEM WIELOCYFROWEGO WPROWADZANIA IR =====
+int irInputBuffer = 0;                 // Bufor dla wprowadzanej liczby (0-100)
+unsigned long irInputTimeout = 0;      // Timeout dla wprowadzania wielocyfrowego
+const int IR_INPUT_TIMEOUT_MS = 3000;  // 3 sekundy na wprowadzenie liczby
+bool irInputActive = false;            // Czy trwa wprowadzanie wielocyfrowe
+
 // Koniec definicji pilota IR
 
-bool  f_callInfo = 0;       // Info
+bool  f_callInfo = 0;       // Flaga czy wsiwetlamy "INFO" również na OLED
+bool  f_logo = 0;           // Flaga czy wyswietlamy logo
+bool  f_simpleMode3 =0;
 
 // SDPlayer global flags
-bool sdPlayerOLEDActive = false;   // Czy SDPlayer OLED jest aktywny
-bool sdPlayerPlayingMusic = false; // Czy SDPlayer odtwarza muzykę
 bool sdPlayerAutoPlayNext = false; // Flaga żądania automatycznego odtworzenia następnego utworu
+bool sdPlayerScanRequested = false; // Flaga żądania skanowania katalogu (obsługa w loop() aby uniknąć watchdog)
+
+// SDPlayer track list variables
+bool listedTracks = false;         // Flaga określająca czy na ekranie jest pokazana lista utworów do wyboru
+int currentTrackSelection = 0;     // Numer aktualnie zaznaczonego utworu w liście
+int firstVisibleTrack = 0;         // Numer pierwszego widocznego utworu na ekranie
+int tracksCount = 0;               // Liczba utworów znalezionych na karcie SD
+int maxVisibleTracks = 4;          // Maksymalna liczba widocznych utworów na ekranie OLED
+String trackFiles[100];            // Tablica przechowująca nazwy plików utworów (max 100)
+int lastPlayedTrackIndex = -1;     // Indeks ostatnio odtwarzanego utworu z listy (-1 = żaden)
+int sdPlayerSessionStartIndex = -1; // Indeks utworu startowego ostatniej sesji SDPlayer
+int sdPlayerSessionEndIndex = -1;   // Indeks ostatniego utworu w ostatniej sesji SDPlayer
+bool sdPlayerSessionCompleted = false; // Czy ostatnia sesja została zakończona/wyłączona
+const char* sdPlayerSessionStateFile = "/sdplayer_session.txt";
+const char* sdPlayerActiveStateFile = "/sdplayer_active.txt"; // Persistent state: czy SD Player był aktywny przed wyłączeniem
 
 int currentSelection = 0;                     // Numer aktualnego wyboru na ekranie OLED
 int firstVisibleLine = 0;                     // Numer pierwszej widocznej linii na ekranie OLED
@@ -287,9 +317,9 @@ const uint8_t yPositionDisplayScrollerMode0 = 33;   // Wysokosc (y) wyswietlania
 const uint8_t yPositionDisplayScrollerMode1 = 61;   // Wysokosc (y) wyswietlania przewijanego/stalego tekstu stacji w danym trybie
 const uint8_t yPositionDisplayScrollerMode2 = 25;   // Wysokosc (y) wyswietlania przewijanego/stalego tekstu stacji w danym trybie
 const uint8_t yPositionDisplayScrollerMode3 = 49;   // Wysokosc (y) wyswietlania przewijanego/stalego tekstu stacji w danym trybie
-const uint8_t yPositionDisplayScrollerMode5 = 41;   // Wysokosc (y) wyswietlania przewijanego/stalego tekstu stacji w danym trybie
+const uint8_t yPositionDisplayScrollerMode8 = 35;   // Wysokosc (y) wyswietlania przewijanego/stalego tekstu stacji w danym trybie
 const uint8_t stationNamePositionYmode3 = 31;
-const uint8_t stationNamePositionYmode5 = 26;
+const uint8_t stationNamePositionYmode8 = 26;
 uint16_t stationStringScrollLength = 0;
 uint8_t maxStationVisibleStringScrollLength = 46;
 bool stationNameFromStream = 0;               // Flaga definiujaca czy wyswietlamy nazwe stacji z plikow Banku pamieci czy z informacji nadawanych w streamie
@@ -309,18 +339,22 @@ unsigned long voiceTimeMillis = 0;
 uint16_t voiceTimeReturnTime = 4000;
 
 
+// ---- SD Player - zapamiętanie stacji przed aktywacją ---- //
+uint8_t sdPlayerReturnBank = 1;          // Bank do którego wracamy po wyjściu z SDPlayera
+uint8_t sdPlayerReturnStation = 4;       // Stacja do której wracamy po wyjściu z SDPlayera
+
 // ---- Auto dimmer / auto przyciemnianie wyswietlacza ---- //
 uint8_t displayDimmerTimeCounter = 0;  // Zmienna inkrementowana w przerwaniu timera2 do przycimniania wyswietlacz
 uint8_t dimmerDisplayBrightness = 10;   // Wartość przyciemnienia wyswietlacza po czasie niekatywnosci
 uint8_t dimmerSleepDisplayBrightness = 1; // Wartość przyciemnienia wyswietlacza po czasie niekatywnosci
 uint8_t displayBrightness = 180;        // Domyślna maksymalna janość wyswietlacza
-uint16_t displayAutoDimmerTime = 5;   // Czas po jakim nastąpi przyciemninie wyswietlacza, liczony w sekundach
-bool displayAutoDimmerOn = false;       // Automatyczne przyciemnianie wyswietlacza, domyślnie włączone
+uint16_t displayAutoDimmerTime = 6;   // Czas po jakim nastąpi przyciemninie wyswietlacza, liczony w sekundach
+bool displayAutoDimmerOn = true;       // Automatyczne przyciemnianie wyswietlacza, domyślnie włączone
 bool displayDimmerActive = false;       // Aktywny tryb przyciemnienia
 uint16_t displayPowerSaveTime = 30;    // Czas po jakim zostanie wyłączony wyswietlacz OLED (tryb power save)
 uint16_t displayPowerSaveTimeCounter = 0;    // Timer trybu Power Save wyswietlacza OLED
 bool displayPowerSaveEnabled = false;   // Flaga okreslajaca czy tryb wyłączania wyswietlacza OLED jest właczony
-uint8_t displayMode = 0;               // Tryb wyswietlacza 0-displayRadio z przewijaniem "scroller" / 1-Zegar / 2- tryb 3 stałych linijek tekstu stacji
+uint8_t displayMode = 6;               // Tryb wyswietlacza 0-displayRadio z przewijaniem "scroller" / 1-Zegar / 2- tryb 3 stałych linijek tekstu stacji
 
 // ---- Equalzier ---- //
 int8_t toneLowValue = 0;               // Wartosc filtra dla tonow niskich
@@ -329,37 +363,73 @@ int8_t toneHiValue = 0;                // Wartość filtra dla tonow wysokich
 uint8_t toneSelect = 1;                // Zmienna okreslająca, który filtr equalizera regulujemy, startujemy od pierwszego
 bool equalizerMenuEnable = false;      // Flaga wyswietlania menu Equalizera
 
-// ---- Zmienne dla przełączania EQ 3↔16 przez 3x "0" ---- //
-uint8_t key0ClickCount = 0;            // Licznik naciśnięć przycisku "0"
-unsigned long lastKey0Press = 0;       // Czas ostatniego naciśnięcia "0"
-const unsigned long KEY0_TIMEOUT = 2000; // Timeout w ms (2 sekundy)
+// ---- Equalizer 16-band ---- //
+#if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+bool eq16Mode = false;                 // false=3-band, true=16-band
+bool eq16ModeSelectActive = false;     // Czy aktywny wybór trybu EQ
+uint8_t eq16SelectedBand = 0;         // Aktualnie wybrany band (0-15)
+int8_t eq16Gains[16] = {0};           // Bufor dla 16 pasm
+#endif
 
-// ---- Zmienne dla przełączania EQ przez 2x Green ---- //
-uint8_t greenClickCount = 0;           // Licznik naciśnięć Green
-unsigned long lastGreenPress = 0;      // Czas ostatniego naciśnięcia Green
-const unsigned long GREEN_TIMEOUT = 1500; // Timeout w ms (1.5 sekundy)
+// =============== ZMIENNE GLOBALNE MODUŁÓW ===============
+// Analyzer - analizator spektrum
+bool analyzerActive = false;     // Czy analyzer jest aktywny
+bool analyzerEnabled = true;    // Czy analyzer jest włączony globalnie
+int analyzerStyles = 2;          // 0=styles 0-4-5, 1=0-4-6, 2=All(0-4-5-6-10-11)
+int analyzerPreset = 4;          // 0=Classic, 1=Modern, 2=Compact, 3=Retro, 4=Custom
+bool displayMode6Enabled = true;  // Czy styl 6 jest dostępny w pętli SRC (0-4,8 zawsze dostępne) 
+bool displayMode8Enabled = true;  // Czy styl 8 jest dostępny w pętli SRC (przeniesiony z 5)
+bool displayMode10Enabled = true; // Czy styl 10 jest dostępny w pętli SRC (0-4,8 zawsze dostępne)
+
+// SDPlayer - odtwarzacz plików (extern dla SDPlayerOLED/WebUI)
+extern bool sdPlayerActive;
+extern bool sdPlayerPlayingMusic;
+extern bool sdPlayerOLEDActive;
+bool sdPlayerActive = false;     // Czy SDPlayer jest aktywny
+bool sdPlayerPlayingMusic = false; // Czy SDPlayer odtwarza muzykę (używane przez SDPlayerOLED/WebUI)
+bool sdPlayerOLEDActive = false;   // Czy OLED SDPlayer jest aktywny
+
+// SDPlayer - style wyświetlania (checkboxy w WebUI dla pętli SRC)
+bool sdPlayerStyle1Enabled = true;   // Style 1-14: kontrola dostępności w nextStyle()
+bool sdPlayerStyle2Enabled = true;
+bool sdPlayerStyle3Enabled = true;
+bool sdPlayerStyle4Enabled = true;
+bool sdPlayerStyle5Enabled = true;
+bool sdPlayerStyle6Enabled = true;
+bool sdPlayerStyle7Enabled = true;
+bool sdPlayerStyle9Enabled = true;   // STYLE_8 jest dostępny na stałe (layout SDPlayerAdvanced)
+bool sdPlayerStyle10Enabled = true;
+bool sdPlayerStyle11Enabled = true;
+bool sdPlayerStyle12Enabled = true;
+bool sdPlayerStyle13Enabled = true;
+bool sdPlayerStyle14Enabled = true;
+
+// BTModule - moduł Bluetooth UART
+bool btModuleEnabled = false;      // Czy moduł BT przez UART jest włączony
+
+// ====================================================
+
 
 uint8_t rcInputDigit1 = 0xFF;      // Pierwsza cyfra w przy wprowadzaniu numeru stacji z pilota
 uint8_t rcInputDigit2 = 0xFF;      // Druga cyfra w przy wprowadzaniu numeru stacji z pilota
 
 
 // ---- Zmienne konfiguracji ---- //
-uint16_t configArray[27] = { 0 };
+uint16_t configArray[45] = {0};  // Zwiększone z 44 na 45 (0-44 = 32 radio + 13 SDPlayer styles)
+#define CONFIG_COUNT 45          // Zwiększone z 44 na 45 (dla wszystkich ustawień włącznie z SDPlayer style 14)
 uint8_t rcPage = 0;
-uint16_t configRemoteArray[30] = { 0 };   // Tablica przechowująca kody pilota podczas odczytu z pliku
-uint16_t configAdcArray[20] = { 0 };      // Tablica przechowująca wartosci ADC dla przyciskow klawiatury
+uint16_t configRemoteArray[30] = {0};   // Tablica przechowująca kody pilota podczas odczytu z pliku
+uint16_t configAdcArray[20] = { 0};      // Tablica przechowująca wartosci ADC dla przyciskow klawiatury
 bool configExist = true;                  // Flaga okreslajaca czy istnieje plik konfiguracji
-bool f_displayPowerOffClock = false;       // Flaga okreslajaca czy w trybie sleep ma się wyswietlac zegar
+bool f_displayPowerOffClock = false;      // Flaga okreslajaca czy w trybie sleep ma się wyswietlac zegar
 bool f_sleepAfterPowerFail = false;       // Flaga czy idziemy do powerOFF po powrocie zasilania
 bool f_saveVolumeStationAlways = false;   // Flaga określająca czy zapisujemy stacje, bank i poziom volume zawsze czy tylko przy power OFF
+//bool f_statusLED = false;
+bool f_powerOffAnimation = false;             // Animacja przy power OFF
 
 //const int maxVisibleLines = 5;  // Maksymalna liczba widocznych linii na ekranie OLED
 bool encoderButton2 = false;      // Flaga określająca, czy przycisk enkodera 2 został wciśnięty
 bool encoderFunctionOrder = true; // Flaga okreslająca kolejność funkcji enkodera 2
-bool eq16MenuActive = false;      // Flaga czy menu EQ16 jest aktywne
-bool eq16BandMode = true;         // true = wybór pasma, false = zmiana gain
-bool useEQ16 = false;             // true = użyj EQ16, false = użyj 3-punktowy equalizer
-bool btMenuActive = false;        // Flaga czy menu Bluetooth jest aktywne
 bool displayActive = false;       // Flaga określająca, czy wyświetlacz jest aktywny
 
 bool mp3 = false;                 // Flaga określająca, czy aktualny plik audio jest w formacie MP3
@@ -381,7 +451,6 @@ bool ActionNeedUpdateTime = false;// Zmiena okresaljaca dla displayRadio potrzeb
 bool debugAudioBuffor = false;    // Wyswietlanie bufora Audio
 bool f_audioInfoRefreshStationString = false;    // Flaga wymuszjąca wymagane odsiwezenie ze względu na zmianę info stream - stationstring, title, 
 bool f_audioInfoRefreshDisplayRadio = false;    // Flaga wymuszjąca wymagane odsiwezenie ze względu na zmianę info stream - linia kbps, khz, format streamu
-bool noSDcard = false;              // flaga ustawiana przy braku wykrycia karty SD
 bool resumePlay = false;            // Flaga wymaganego uruchomienia odtwarzania po zakonczeniu komunikatu głosowego
 bool fwupd = false;               // Flaga blokujaca main loop podczas aktualizacji oprogramowania
 bool configIrExist = false;       // Flaga informująca o istnieniu poprawnej konfiguracji pilota IR
@@ -390,10 +459,11 @@ bool f_voiceTimeBlocked = false;
 bool f_displaySleepTime = false;    // Flaga wysiwetlania menu timera
 bool f_displaySleepTimeSet = false;    // Flaga ustawienia sleep timera
 
-
+bool noSDcard = false;              // flaga ustawiana przy braku wykrycia karty SD
+bool noStorage = false;             // flaga ustawiana przy problemie z pamiecia SPIFFS/LittleFS
 
 unsigned long debounceDelay = 300;    // Czas trwania debouncingu w milisekundach
-unsigned long displayTimeout = 5000;  // Czas wyświetlania komunikatu na ekranie w milisekundach
+unsigned long displayTimeout = 8000;  // Czas wyświetlania komunikatu na ekranie w milisekundach (8 sekund)
 unsigned long displayStartTime = 0;   // Czas rozpoczęcia wyświetlania komunikatu
 unsigned long seconds = 0;            // Licznik sekund timera
 unsigned int PSRAM_lenght = MAX_STATIONS * (STATION_NAME_LENGTH) + MAX_STATIONS; // deklaracjia długości pamięci PSRAM
@@ -415,18 +485,13 @@ const uint8_t vuLy = 41;                   // Koordynata Y wskaznika VU L-lewego
 const uint8_t vuRy = 47;                   // Koordynata Y wskaznika VU R-prawego (nizej)
 const uint8_t vuLyMode3 = 54;              // Koordynata Y wskaznika VU L-lewego (wyzej)
 const uint8_t vuRyMode3 = 60;              // Koordynata Y wskaznika VU R-prawego (nizej
+const uint8_t vuLyMode5 = 43;                   // Koordynata Y wskaznika VU L-lewego (wyzej)
+const uint8_t vuRyMode5 = 49;                   // Koordynata Y wskaznika VU R-prawego (nizej)
 const uint8_t vuThicknessMode3 = 1;        // Grubosc kreseczki wskaznika VU w trybie Mode3
 const int vuCenterXmode3 = 128;            // Pozycja centralna startu VU w trybie Mode 3
 const int vuYmode3 = 62;                   // Polozenie wyokosci (Y) VU w trybie Mode 3
 bool vuPeakHoldOn = 1;                     // Flaga okreslajaca czy funkcja Peak & Hold na wskazniku VUmeter jest wlaczona
 bool vuMeterOn = true;                     // Flaga właczajaca wskazniki VU
-bool eqAnalyzerOn = true;                // FFT analyzer on/off for styles 5 & 6 (from Web UI) - DOMYŚLNIE WŁĄCZONY
-
-// ============================================================================
-// 16-BAND GRAPHIC EQUALIZER
-// ============================================================================
-
-// Stare definicje EQ16 zostały przeniesione do EQ16_GraphicEQ.h
 bool vuMeterMode = false;                  // tryb rysowania vuMeter
 uint8_t displayVuL = 0;                    // wartosc VU do wyswietlenia po procesie smooth
 uint8_t displayVuR = 0;                    // wartosc VU do wyswietlenia po procesie smooth
@@ -487,6 +552,11 @@ String streamCodec;
 String stationLogoUrl;
 String timezone;
 
+// Metadane ID3 dla plików MP3 (SDPlayer)
+String currentMP3Artist = "";
+String currentMP3Title = "";
+String currentMP3Album = "";
+
 
 String header;                      // Zmienna dla serwera www
 String sliderValue = "0";
@@ -496,12 +566,7 @@ String url2play = "";
 File myFile;  // Uchwyt pliku
 
 U8G2_SSD1322_NHD_256X64_F_4W_HW_SPI u8g2(U8G2_R2, /* cs=*/CS_OLED, /* dc=*/DC_OLED, /* reset=*/RESET_OLED);  // Hardware SPI 3.12inch OLED
-
-// Getter function for STORAGE to be used by external modules
-fs::FS& getStorage() {
-  return STORAGE;
-}
-
+//U8G2_SSD1309_128X64_NONAME0_F_4W_HW_SPI u8g2(U8G2_R2, /* cs=*/CS_OLED, /* dc=*/DC_OLED, /* reset=*/RESET_OLED);  
 //U8G2_SH1122_256X64_F_4W_HW_SPI u8g2(U8G2_R2, /* cs=*/ CS_OLED, /* dc=*/ DC_OLED, /* reset=*/ RESET_OLED);		// Hardware SPI  2.08inch OLED
 //U8G2_SSD1363_256X128_F_4W_HW_SPI u8g2(U8G2_R0, /* cs=*/CS_OLED, /* dc=*/DC_OLED, /* reset=*/RESET_OLED);  // Hardware SPI 3.12inch OLED
 
@@ -527,6 +592,8 @@ Audio audio;                // Obiekt do obsługi funkcji związanych z dźwięk
 SDPlayerWebUI* g_sdPlayerWeb = nullptr;
 SDPlayerOLED* g_sdPlayerOLED = nullptr;
 BTWebUI* g_btWebUI = nullptr;
+// SDRecorder - globalna instancja (definicja w SDRecorder.cpp)
+// extern SDRecorder* g_sdRecorder; // Jest już zdefiniowane w SDRecorder.h
 
 // Wrapper functions for SDPlayer
 void SDPlayerOLED_init(U8G2* display) {
@@ -536,18 +603,73 @@ void SDPlayerOLED_init(U8G2* display) {
   if (!g_sdPlayerOLED) {
     g_sdPlayerOLED = new SDPlayerOLED(*display);
     g_sdPlayerOLED->begin(g_sdPlayerWeb);
+    
+    // KRYTYCZNE: Ustaw referencję OLED w WebUI dla przełączników stylów
+    if (g_sdPlayerWeb) {
+      g_sdPlayerWeb->setOLED(g_sdPlayerOLED);
+      Serial.println("[Main] SDPlayer WebUI->OLED reference established for style switching");
+    }
+    
+    // NOWA SYNCHRONIZACJA: Ustaw callback między WebUI i OLED
+    if (g_sdPlayerWeb && g_sdPlayerOLED) {
+      // WebUI -> OLED: synchronizuj index wyboru 
+      g_sdPlayerWeb->setIndexChangeCallback([](int newIndex) {
+        if (g_sdPlayerOLED && g_sdPlayerOLED->isActive() && newIndex >= 0) {
+          g_sdPlayerOLED->setSelectedIndex(newIndex);
+          Serial.printf("[Main] WebUI->OLED index sync: %d\\n", newIndex);
+        }
+      });
+      
+      // OLED -> WebUI: synchronizuj index z pilota/enkodera
+      g_sdPlayerOLED->setIndexChangeCallback([](int newIndex) {
+        if (g_sdPlayerWeb && newIndex >= 0) {
+          g_sdPlayerWeb->notifyIndexChange(newIndex);
+          Serial.printf("[Main] OLED->WebUI index sync: %d\\n", newIndex);
+        }
+      });
+      
+      Serial.println("[Main] SDPlayer bi-directional sync initialized");
+    }
   }
 }
 
 void SDPlayerOLED_loop() {
-  if (g_sdPlayerOLED) {
-    g_sdPlayerOLED->loop();
+  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+    // KRYTYCZNE: Nie rysuj stylu SDPlayerOLED gdy aktywna jest lista utworów
+    if (!listedTracks) {
+      g_sdPlayerOLED->loop();
+    }
+    // Gdy listedTracks == true, lista pozostaje na ekranie
+    // (narysowana przez displayTracks(), nie jest nadpisywana)
   }
 }
 
 void SDPlayerWebUI_registerHandlers(AsyncWebServer& server) {
   if (g_sdPlayerWeb) {
     g_sdPlayerWeb->begin(&server, &audio);
+  }
+}
+
+// Wrapper functions for SDRecorder
+void SDRecorder_displayCallback(const String& status, const String& time, const String& size) {
+  // Wyświetl status nagrywania na OLED (w przyszłości może być osobny ekran)
+  // Na razie loguj do Serial
+  Serial.printf("[SDRecorder Display] Status: %s, Time: %s, Size: %s\n", 
+                status.c_str(), time.c_str(), size.c_str());
+}
+
+void SDRecorder_init() {
+  if (!g_sdRecorder) {
+    g_sdRecorder = new SDRecorder();
+    g_sdRecorder->begin();
+    g_sdRecorder->setDisplayCallback(SDRecorder_displayCallback);
+    Serial.println("[SDRecorder] Initialized");
+  }
+}
+
+void SDRecorder_loop() {
+  if (g_sdRecorder) {
+    g_sdRecorder->loop();
   }
 }
 
@@ -570,6 +692,7 @@ void BTWebUI_registerHandlers(AsyncWebServer& server) {
     g_btWebUI->begin(&server, 19, 20, 115200);
   }
 }
+
 
 Ticker timer1;             // Timer do updateTimer co 1s
 Ticker timer2;             // Timer do getWeatherData co 60s
@@ -802,11 +925,11 @@ const char index_html[] PROGMEM = R"rawliteral(
       if (event.data.startsWith("stationtext$")) 
       {
         //var stationtext = event.data.split("$")[1];
-        var stationtext = event.data.substring(event.data.indexOf("$") + 1);
-        //document.getElementById("stationText").innerHTML = stationtext;
-        document.getElementById("stationText").textContent = stationtext;
         //document.getElementById("stationText").innerHTML = `${stationtext}`;
-        //checkStationTextLength();
+        
+        var stationtext = event.data.substring(event.data.indexOf("$") + 1);
+        //document.getElementById("stationText").innerHTML = stationtext;       
+        document.getElementById("stationText").textContent = stationtext;
       }  
 
       if (event.data.startsWith("bank:")) 
@@ -815,24 +938,72 @@ const char index_html[] PROGMEM = R"rawliteral(
         document.getElementById('bankValue').innerText = 'Bank: ' + bankValue;
       } 
 
+      //if (event.data.startsWith("samplerate:")) 
+      //{
+      //  var samplerate = parseInt(event.data.split(":")[1]);
+      //  var formattedRate = (samplerate / 1000).toFixed(1) + "kHz";
+      //  document.getElementById('samplerate').innerText = formattedRate;
+      //}
+      
       if (event.data.startsWith("samplerate:")) 
       {
-        var samplerate = parseInt(event.data.split(":")[1]);
-        var formattedRate = (samplerate / 1000).toFixed(1) + "kHz";
-        document.getElementById('samplerate').innerText = formattedRate;
+        var raw = event.data.split(":")[1];
+        var samplerate = parseInt(raw);
+
+        if (isNaN(samplerate)) 
+        {
+          document.getElementById('samplerate').innerText = '---.-kHz';
+        } 
+        else 
+        {
+          var formattedRate = (samplerate / 1000).toFixed(1) + "kHz";
+          document.getElementById('samplerate').innerText = formattedRate;
+        }
       }
-      
+
+      //if (event.data.startsWith("bitrate:")) 
+      //{	
+      //  var bitrate = parseInt(event.data.split(":")[1]);
+      //  document.getElementById('bitrate').innerText = bitrate + 'kbps';
+      //}
+
       if (event.data.startsWith("bitrate:")) 
       {	
-        var bitrate = parseInt(event.data.split(":")[1]);
-        document.getElementById('bitrate').innerText = bitrate + 'kbps';
-      }  
+        var raw = event.data.split(":")[1];
+        var bitrate = parseInt(raw);
+
+        if (isNaN(bitrate)) 
+        {
+          document.getElementById('bitrate').innerText = '---kbps';
+        } 
+        else 
+        {
+          document.getElementById('bitrate').innerText = bitrate + 'kbps';
+        }
+      }
+
       
+      //if (event.data.startsWith("bitpersample:")) 
+      //{	
+      //  var bitpersample = parseInt(event.data.split(":")[1]);
+      //  document.getElementById('bitpersample').innerText = bitpersample + 'bit';
+      //}
+
       if (event.data.startsWith("bitpersample:")) 
       {	
-        var bitpersample = parseInt(event.data.split(":")[1]);
-        document.getElementById('bitpersample').innerText = bitpersample + 'bit';
-      }  
+        var raw = event.data.split(":")[1];
+        var bitpersample = parseInt(raw);
+
+        if (isNaN(bitpersample)) 
+        {
+          document.getElementById('bitpersample').innerText = '---bit';
+        } 
+        else 
+        {
+          document.getElementById('bitpersample').innerText = bitpersample + 'bit';
+        }
+      }
+
       
       if (event.data.startsWith("streamformat:")) 
       {	
@@ -842,7 +1013,8 @@ const char index_html[] PROGMEM = R"rawliteral(
 
       if (event.data.startsWith("mute:")) 
       {
-        var muteInd = parseInt(event.data.split(":")[1]);
+        //var muteInd = parseInt(event.data.split(":")[1]);
+        const muteInd = event.data.split(":")[1] === "1" ? 1 : 0;
         document.getElementById('muteIndicator').textContent = (muteInd === 1) ? 'MUTED' : '';       
       }
 
@@ -1023,7 +1195,7 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><td>OLED Display Clock in Sleep Mode default:Off</td><td><input type="checkbox" name="f_displayPowerOffClock" value="1" %S19_checked></td></tr>
   <tr><td>OLED Display Power Save Mode, default:Off</td><td><input type="checkbox" name="displayPowerSaveEnabled" value="1" %S9_checked></td></tr>
   <tr><td>OLED Display Power Save Time (1-600sek.), default:20</td><td><input type="number" name="displayPowerSaveTime" min="1" max="600" value="%D9"></td></tr>
-  <tr><td>OLED Display Mode: 0-Radio, 1-Clock, 2-Lines, 3-Minimal, 4-VU, 5-Analyzer, 6-Segments, 7-Circles, 8-Lines, 9-Snow, 10-FloatingPeaks</td><td><input type="number" name="displayMode" min="0" max="10" value="%D6"></td></tr>
+  <tr><td>OLED Display Mode: 0-Radio, 1-Clock, 2-Lines, 3-Minimal, 4-VU, 5-Analyzer, 6-Segments, 10-FloatingPeaks</td><td><input type="number" name="displayMode" min="0" max="10" value="%D6"></td></tr>
 
   <tr><th>Other Setting</th><th></th></tr>
   <tr><td>Time Voice Info Every Hour, default:On</td><td><input type="checkbox" name="timeVoiceInfoEveryHour" value="1" %S3_checked></td></tr>
@@ -1035,6 +1207,7 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><td>Radio switch to Standby After Power Fail, default:On</td><td><input type="checkbox" name="f_sleepAfterPowerFail" value="1" %S21_checked></td></tr>
   <tr><td>Volume Fade on Station Change and Power Off, default:Off</td><td><input type="checkbox" name="f_volumeFadeOn" value="1" %S22_checked></td></tr>
   <tr><td>Save ALWAYS Station No., Bank No., Volume, default:Off</td><td><input type="checkbox" name="f_saveVolumeStationAlways" value="1" %S23_checked></td></tr>
+  <tr><td>Power Off Animation, default:Off</td><td><input type="checkbox" name="f_powerOffAnimation" value="1" %S24_checked></td></tr>
   <tr><td>Timezone settings</td><td><button type="button" class="button" onclick="location.href='/timezone'">Set</button></td></tr>
 
   <tr><th><b>VU Meter Settings</b></th></tr>
@@ -1044,25 +1217,39 @@ const char config_html[] PROGMEM = R"rawliteral(
   <tr><td>VU Meter Smooth Function, default:On</td><td><input type="checkbox" name="vuSmooth" value="1" %S15_checked></td></tr>
   <tr><td>VU Meter Smooth Rise Speed [1 low - 32 High], default:24</td><td><input type="number" name="vuRiseSpeed" min="1" max="32" value="%D10"></td></tr>
   <tr><td>VU Meter Smooth Fall Speed [1 low - 32 High], default:6</td><td><input type="number" name="vuFallSpeed" min="1" max="32" value="%D11"></td></tr>
-  <tr><td>FFT / Analyzer for Styles 5-9, default:On</td><td><input type="checkbox" name="eqAnalyzerOn" value="1" %S24_checked></td></tr>
-  <tr><td>Available Analyzer Styles: 0=0-4-5, 1=0-4-6, 2=All(0-4-5-6-7-8-9)</td><td><input type="number" name="analyzerStylesMode" min="0" max="2" value="%ANALYZER_STYLES"></td></tr>
-  <tr><td>Analyzer Preset: 0=Classic, 1=Modern, 2=Compact, 3=Retro, 4=Custom</td><td><input type="number" name="analyzerCurrentPreset" min="0" max="4" value="%ANALYZER_PRESET"></td></tr>
-
-  <tr><th><b>16-Band Graphic Equalizer</b></th></tr>
-  <tr><td>Enable 16-Band Graphic Equalizer, default:Off</td><td><input type="checkbox" name="eq16Enabled" value="1" %EQ16_ENABLED_checked></td></tr>
-  <tr><td>EQ16 Actions</td><td>
-    <button type="button" class="button" onclick="location.href='/eq16reset'">Reset All</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/0'">Flat</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/1'">Bass</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/2'">Vocal</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/3'">Presence</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/4'">V-Shape</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/5'">Rock/Metal</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/6'">Jazz</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/7'">Electronic</button>
-    <button type="button" class="button" onclick="location.href='/eq16preset/8'">Custom</button>
-  </td></tr>
+  <tr><td>FFT / Analyzer for Styles 5,6,10, default:On</td><td><input type="checkbox" name="fftAnalyzerOn" value="1" %S25_checked></td></tr>
+  
+  <tr><th><b>Display Mode Selection (SRC Button)</b></th></tr>
+  <tr><td colspan="2"><i>Modes 0-4,8 are always available. Enable optional modes below:</i></td></tr>
+  <tr><td>Enable Display Mode 6 (Segments Analyzer) in SRC cycle</td><td><input type="checkbox" name="displayMode6Enabled" value="1" %S27_checked></td></tr>
+  <tr><td>Enable Display Mode 8 (Bars Analyzer) in SRC cycle</td><td><input type="checkbox" name="displayMode8Enabled" value="1" %S29_checked></td></tr>
+  <tr><td>Enable Display Mode 10 (Floating Peaks Analyzer) in SRC cycle</td><td><input type="checkbox" name="displayMode10Enabled" value="1" %S28_checked></td></tr>
+  
+  <tr><th><b>Analyzer Configuration</b></th></tr>
+  <tr><td>Analyzer Preset: 0=Classic, 1=Modern, 2=Compact, 3=Retro, 4=Custom</td><td><input type="number" name="analyzerPreset" min="0" max="4" value="%A2"></td></tr>
+  <tr><td>Analyzer Settings</td><td><button type="button" class="button" onclick="location.href='/analyzer'">Configure</button></td></tr>
+  
+  <tr><th><b>SD Player Style Selection (SRC Button)</b></th></tr>
+  <tr><td colspan="2"><i>Select which SD Player styles should be available in SRC button cycle:</i></td></tr>
+  <tr><td>Enable SD Player Style 1 (List with top bar)</td><td><input type="checkbox" name="sdPlayerStyle1" value="1" %S31_checked></td></tr>
+  <tr><td>Enable SD Player Style 2 (Large track text)</td><td><input type="checkbox" name="sdPlayerStyle2" value="1" %S32_checked></td></tr>
+  <tr><td>Enable SD Player Style 3 (VU meter + track)</td><td><input type="checkbox" name="sdPlayerStyle3" value="1" %S33_checked></td></tr>
+  <tr><td>Enable SD Player Style 4 (Frequency spectrum)</td><td><input type="checkbox" name="sdPlayerStyle4" value="1" %S34_checked></td></tr>
+  <tr><td>Enable SD Player Style 5 (Minimalist)</td><td><input type="checkbox" name="sdPlayerStyle5" value="1" %S35_checked></td></tr>
+  <tr><td>Enable SD Player Style 6 (Album art simulation)</td><td><input type="checkbox" name="sdPlayerStyle6" value="1" %S36_checked></td></tr>
+  <tr><td>Enable SD Player Style 7 (Retro analyzer triangles)</td><td><input type="checkbox" name="sdPlayerStyle7" value="1" %S37_checked></td></tr>
+  <tr><td>Enable SD Player Style 9 (VU meters below scroll)</td><td><input type="checkbox" name="sdPlayerStyle9" value="1" %S38_checked></td></tr>
+  <tr><td>Enable SD Player Style 10 (Fullscreen animation)</td><td><input type="checkbox" name="sdPlayerStyle10" value="1" %S39_checked></td></tr>
+  <tr><td>Enable SD Player Style 11 (Based on Radio Mode 0)</td><td><input type="checkbox" name="sdPlayerStyle11" value="1" %S40_checked></td></tr>
+  <tr><td>Enable SD Player Style 12 (Based on Radio Mode 1)</td><td><input type="checkbox" name="sdPlayerStyle12" value="1" %S41_checked></td></tr>
+  <tr><td>Enable SD Player Style 13 (Based on Radio Mode 2)</td><td><input type="checkbox" name="sdPlayerStyle13" value="1" %S42_checked></td></tr>
+  <tr><td>Enable SD Player Style 14 (Based on Radio Mode 3)</td><td><input type="checkbox" name="sdPlayerStyle14" value="1" %S43_checked></td></tr>
+  
+  <tr><th><b>Bluetooth Module (UART)</b></th></tr>
+  <tr><td>Enable BT UART Module (RX=19, TX=20), default:Off</td><td><input type="checkbox" name="btModuleEnabled" value="1" %S26_checked></td></tr>
+  
   </table>
+  
   <input type="submit" value="Update">
   </form>
 
@@ -1174,7 +1361,6 @@ const char menu_html[] PROGMEM = R"rawliteral(
   </head>
   <body>
   <h2>Evo Web Radio - Menu</h2>
-  <!-- <br><button class="button" onclick="location.href='/fwupdate'">OTA Update (Old)</button><br> -->
   <br><button class="button" onclick="location.href='/info'">Info</button><br>
   <br><button class="button" onclick="location.href='/ota'">OTA Update</button><br>
   <br><button class="button" onclick="location.href='/sdplayer'">SD Player</button><br>
@@ -1226,10 +1412,11 @@ const char info_html[] PROGMEM = R"rawliteral(
   <div class="about-box">
     <h3>Project Info</h3>
     <p>This is a project of an Internet radio streamer called <strong>"Evo"</strong>. The hardware was built using an <strong>ESP32-S3</strong> microcontroller and a <strong>PCM5102A DAC codec</strong>.</p>
-    <p>The design allows listening to various music stations from all around the world and works properly with streams encoded in <strong>MP3</strong>, <strong>AAC</strong>, <strong>VORBIS</strong>, <strong>OPUS</strong>, and <strong>FLAC</strong> (up to 1.5&nbsp;Mbit/s).</p>
+    <p>The design allows listening to various music stations from all around the world and works properly with streams encoded in <strong>MP3</strong>, <strong>AAC</strong>, <strong>VORBIS</strong>, <strong>OPUS</strong>, and <strong>FLAC</strong> (up to 2.5&nbsp;Mbit/s, 24bit).</p>
     <p>All operations (volume control, station change, memory bank selection, power on/off) are handled via a single rotary encoder. It also supports infrared remote controls working on the <strong>NEC standard (38&nbsp;kHz)</strong>.</p>
     <p></p>
     <p>Source code and documentation are available at: <b><a href="https://github.com/dzikakuna/ESP32_radio_evo3" target="_blank">github.com/dzikakuna/ESP32_radio_evo3</a></b></p>
+    <p>Robgold 2026, Made in Poland</p>
   </div>
 
   <form action="/configadc" method="POST">
@@ -1472,95 +1659,6 @@ const char urlplay_html[] PROGMEM = R"rawliteral(
   });
   </script>
   </body>
-</html>
-)rawliteral";
-
-// =====================================================================================
-// BLUETOOTH CONFIGURATION PAGE
-// =====================================================================================
-const char bt_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE HTML>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <link rel='icon' href='/favicon.ico' type='image/x-icon'>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bluetooth Settings - EVO Radio</title>
-  <style>
-    html {font-family: Arial; display: inline-block; text-align: center;}
-    h2 {font-size: 1.5rem; color: #333;}
-    body {max-width: 600px; margin:0 auto; padding: 20px; background: #f0f0f0;}
-    .card {background: white; border-radius: 10px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 5px rgba(0,0,0,0.1);}
-    .status {font-size: 1.2rem; padding: 10px; border-radius: 5px; margin: 10px 0;}
-    .status.connected {background: #4CAF50; color: white;}
-    .status.disconnected {background: #f44336; color: white;}
-    .status.off {background: #9e9e9e; color: white;}
-    .btn {background: #2196F3; border: none; color: white; padding: 12px 24px; border-radius: 5px; margin: 5px; cursor: pointer; font-size: 1rem;}
-    .btn:hover {background: #1976D2;}
-    .btn.active {background: #4CAF50;}
-    .btn.danger {background: #f44336;}
-    .btn.danger:hover {background: #d32f2f;}
-    select, input[type="number"] {padding: 10px; font-size: 1rem; border-radius: 5px; border: 1px solid #ccc; margin: 5px;}
-    label {display: block; margin: 10px 0 5px; font-weight: bold;}
-    .mode-btns {display: flex; justify-content: center; flex-wrap: wrap;}
-    .info {font-size: 0.9rem; color: #666; margin-top: 5px;}
-  </style>
-</head>
-<body>
-  <h2>&#128167; Bluetooth Settings</h2>
-  
-  <div class="card">
-    <h3>Status</h3>
-    <div class="status %BT_STATUS_CLASS%">%BT_STATUS%</div>
-    <p class="info">Mode: <strong>%BT_MODE%</strong></p>
-    <p class="info">Device: <strong>%BT_DEVICE%</strong></p>
-  </div>
-
-  <div class="card">
-    <h3>Mode Selection</h3>
-    <div class="mode-btns">
-      <button class="btn %BT_OFF_ACTIVE%" onclick="setMode(0)">OFF</button>
-      <button class="btn %BT_RX_ACTIVE%" onclick="setMode(1)">RX (Receiver)</button>
-      <button class="btn %BT_TX_ACTIVE%" onclick="setMode(2)">TX (Transmitter)</button>
-      <button class="btn %BT_AUTO_ACTIVE%" onclick="setMode(3)">AUTO</button>
-    </div>
-    <p class="info">RX = Phone sends audio to Radio | TX = Radio sends audio to BT headphones</p>
-  </div>
-
-  <div class="card">
-    <h3>Volume (BT RX Mode)</h3>
-    <input type="number" id="btVolume" min="0" max="30" value="%BT_VOLUME%">
-    <button class="btn" onclick="setVolume()">Set</button>
-  </div>
-
-  <div class="card">
-    <h3>Actions</h3>
-    <button class="btn" onclick="location.href='/bt/scan'">Scan Devices</button>
-    <button class="btn" onclick="location.href='/bt/disconnect'">Disconnect</button>
-    <button class="btn danger" onclick="if(confirm('Delete all paired devices?')) location.href='/bt/deleteall'">Delete All Paired</button>
-  </div>
-
-  <div class="card">
-    <form action="/bt/save" method="POST">
-      <input type="hidden" name="mode" value="%BT_MODE_VAL%">
-      <input type="hidden" name="volume" id="volHidden" value="%BT_VOLUME%">
-      <button type="submit" class="btn">&#128190; Save Settings</button>
-    </form>
-  </div>
-
-  <p><a href='/menu'>&#8592; Back to Menu</a></p>
-
-  <script>
-    function setMode(mode) {
-      fetch('/bt/mode?m=' + mode).then(() => location.reload());
-    }
-    function setVolume() {
-      var vol = document.getElementById('btVolume').value;
-      document.getElementById('volHidden').value = vol;
-      fetch('/bt/volume?v=' + vol).then(() => location.reload());
-    }
-  </script>
-</body>
 </html>
 )rawliteral";
 
@@ -1912,7 +2010,41 @@ uint8_t spleen6x12PL[2958] U8G2_FONT_SECTION("spleen6x12PL") =
   "%Y\222%Y\222ECN\5\373\22\346q\205I\216dI\226dI\226d\321\220S\1\374\22\346\361"
   "\3I\216dI\226dI\226d\321\220S\1\375\23\346\361\205\71\224%Y\222%Y\222ECZ\31\42"
   "\0\376\22\346q\247\351\20eI\226dI\226\14Q\232\203\0\377\23\346\361\3I\216dI\226dI\226"
-  "d\321\220V\206\10\0\0\0\4\377\377\0";
+  "d\321\220V\206\10\0\0\0\4\377\377\0"
+;
+
+const uint8_t mono04b03b[912] U8G2_FONT_SECTION("mono04b03b") = 
+  "`\1\3\3\3\3\1\1\4\5\6\0\377\5\377\5\0\1$\2c\3s \6s{D\0!\10r"
+  "\212HZ\14\0\42\10t\214Hv\64\0#\14v\236\244R$T\212\304!\0$\12u\235I\22)"
+  "\22\231\3%\14v\16QD\22L\221\204\344\0&\13v\216Y\264\22\12\321!\0'\7r\212H\34"
+  "\4(\10s\233\244\264 \0)\10s\213X(%\12*\11t\214H(%\16\6+\10t\334\320("
+  "\16\3,\7s{p$\4-\7t|\310\34\14.\7rzH\14\0/\7v\316\274\3\1\60\14"
+  "u\15J(\22\212\204\42d\0\61\10u\35a\266\61\0\62\11u\15b\204\22$\3\63\11u\15b"
+  "\204\30!\3\64\14u\215P$\24\11E\210a\0\65\11u\15J\220\30!\3\66\12u\215Q\220\22"
+  "\212\220\1\67\11u\15b,\61\16\1\70\13u\15J(B\11E\310\0\71\12u\15J(B\14\215"
+  "\1:\7r\252X\24\0;\7r\252X$\6<\7t\254\214\251\0=\7t\314\351\34\4>\10t"
+  "\214`R:\0\77\12u\15bh\16\210C\0@\14v\216J,\22\231d\241C\0A\14u\15J"
+  "(B\11EBa\0B\13u\215Q$D\11E\310\0C\10u\15J\60\221\14D\13u\215QJ"
+  "(\22\212\314\1E\11u\15J\220\22$\3F\12u\15J\220\22\214\203\0G\13u\15J\60\42\11"
+  "E\310\0H\15u\215P$\24\241\204\42\241\60\0I\10u\235Y\60m\14J\11u-aJ(B"
+  "\6K\14u\215P$\24\31\245\204\302\0L\10u\215`F\62\0M\10v\216J\376\357\0N\15u"
+  "\215PD\222\42\11EBa\0O\14u\15J(\22\212\204\42d\0P\14u\15J(\22\212P\342"
+  " \0Q\14u\15J(\22\212D$d\0R\13u\15J(BI\212\210\1S\11u\15J\220\30"
+  "!\3T\10t\214Q,\63\0U\15u\215P$\24\11EB\21\62\0V\15u\215P$\24I\212"
+  "\304\342\20\0W\11v\216H\376\227:\0X\14u\215P$\24\22\245\204\302\0Y\13u\215P$\24"
+  "!F\310\0Z\11u\15bH\24$\3[\10s\13I(I\10\134\7v\216p\356\0]\10s\13"
+  "Q\26!\0^\10t\234P$\216\6_\7u}d\62\0`\7s\213X\34\14a\11u}\340$"
+  "\24!\3b\11u\335 %\24!\3c\10t|\310$\66\5d\12u}H\204\22\212\220\1e\10"
+  "u}\30%m\14f\11u\355Q\214\24\207\0g\12u}\30%\24\241\205\0h\12u\335 %\24"
+  "\11\205\1i\7r\252X$\6j\10r\252X$\5\0k\11u\335`(\62J\6l\7r\252H"
+  "\66\0m\10v~h%\337\1n\12u}\30%\24\11\205\1o\11u}\30%\24!\3p\12u"
+  "}\30%\24\241\4\1q\12u}\30%\24!F\0r\10t|\310$\26\7s\10u}\30)F"
+  "\6t\10t\334\320(&\5u\12u}X(\22\212\220\1v\12u}X(\22\12\311\1w\11v"
+  "~h$/u\0x\11t|HRJ\24\0y\13u}X(\22\212\20#\0z\10u}\30-"
+  "D\6{\10t\34QbL\12|\7r\212Hn\0}\11t\14Y\60\24\22\3~\7u\235\334\261"
+  "\0\177\7t\14\221\316\0\0\0\0\4\377\377\0"
+;
+
 
 // Ikona karty SD wyswietlana przy braku karty podczas startu
 static unsigned char sdcard[] PROGMEM = {
@@ -2061,309 +2193,6 @@ static unsigned char notes[] PROGMEM = {
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
 
-#define diora_width 256
-#define diora_height 62
-static unsigned char diora[] PROGMEM = {
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x80, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0,
-   0xff, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xff, 0xff, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0xff,
-   0xff, 0xff, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xff, 0xff, 0xff, 0x1f, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x3f, 0x00, 0x00, 0xf8, 0xff, 0xff,
-   0x01, 0x00, 0xe0, 0xff, 0x00, 0x00, 0xe0, 0xff, 0x01, 0x00, 0xc0, 0xff,
-   0xff, 0xff, 0x00, 0x00, 0x00, 0xf0, 0x7f, 0x00, 0x00, 0x00, 0xfc, 0xff,
-   0xff, 0xff, 0x7f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0x07, 0x00, 0xe0, 0xff,
-   0x00, 0x00, 0xf8, 0xff, 0x1f, 0x00, 0xc0, 0xff, 0xff, 0xff, 0x03, 0x00,
-   0x00, 0xf8, 0xff, 0x00, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff, 0xff, 0x00,
-   0x00, 0xfc, 0xff, 0xff, 0x3f, 0x00, 0xe0, 0xff, 0x00, 0x00, 0xfe, 0xff,
-   0x7f, 0x00, 0xc0, 0xff, 0xff, 0xff, 0x1f, 0x00, 0x00, 0xfc, 0xff, 0x00,
-   0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0xfc, 0xff, 0xff,
-   0x7f, 0x00, 0xe0, 0xff, 0x00, 0x80, 0xff, 0xff, 0xff, 0x00, 0xe0, 0xff,
-   0xff, 0xff, 0x3f, 0x00, 0x00, 0xfc, 0xff, 0x01, 0x00, 0x80, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x03, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x00, 0xf0, 0xff,
-   0x00, 0xe0, 0xff, 0xff, 0xff, 0x01, 0xe0, 0xff, 0xff, 0xff, 0x3f, 0x00,
-   0x00, 0xfe, 0xff, 0x01, 0x00, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07,
-   0x00, 0xfe, 0xff, 0xff, 0xff, 0x01, 0xf0, 0x7f, 0x00, 0xf0, 0xff, 0xff,
-   0xff, 0x03, 0xe0, 0xff, 0xff, 0xff, 0x7f, 0x00, 0x00, 0xff, 0xff, 0x01,
-   0x00, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f, 0x00, 0xfe, 0xff, 0xff,
-   0xff, 0x03, 0xf0, 0x7f, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x03, 0xe0, 0xff,
-   0xff, 0xff, 0x7f, 0x00, 0x00, 0xff, 0xff, 0x01, 0x00, 0xe0, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x0f, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x03, 0xf0, 0x7f,
-   0x00, 0xfc, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0xff, 0x0f, 0xc0, 0xff, 0x07, 0xf8, 0x3f, 0xc0, 0xff, 0x07, 0x80,
-   0xff, 0x0f, 0xf0, 0x7f, 0x00, 0xf8, 0x7f, 0x00, 0xf0, 0xff, 0xff, 0x01,
-   0x00, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f, 0x00, 0xff, 0x07, 0xc0,
-   0xff, 0x07, 0xf8, 0x3f, 0xc0, 0xff, 0x03, 0x00, 0xff, 0x0f, 0xf0, 0x7f,
-   0x00, 0xf8, 0x7f, 0x00, 0xf0, 0xbf, 0xff, 0x03, 0x00, 0xfc, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x7f, 0x80, 0xff, 0x07, 0x80, 0xff, 0x07, 0xf8, 0x3f,
-   0xe0, 0xff, 0x01, 0x00, 0xff, 0x0f, 0xf8, 0x3f, 0x00, 0xfc, 0x3f, 0x00,
-   0xf8, 0xbf, 0xff, 0x03, 0x00, 0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
-   0x80, 0xff, 0x07, 0x80, 0xff, 0x07, 0xfc, 0x1f, 0xe0, 0xff, 0x00, 0x00,
-   0xff, 0x0f, 0xf8, 0x3f, 0x00, 0xfc, 0x3f, 0x00, 0xfc, 0x9f, 0xff, 0x03,
-   0x00, 0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x80, 0xff, 0x03, 0x80,
-   0xff, 0x07, 0xfc, 0x1f, 0xf0, 0x7f, 0x00, 0x00, 0xff, 0x0f, 0xf8, 0x3f,
-   0x00, 0xfc, 0x1f, 0x00, 0xfc, 0x8f, 0xff, 0x03, 0x00, 0xfc, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0xc0, 0xff, 0x01, 0xc0, 0xff, 0x03, 0xff, 0x0f,
-   0xf8, 0x3f, 0x00, 0x00, 0xff, 0x07, 0xfc, 0xff, 0xff, 0xff, 0x01, 0x80,
-   0xff, 0x03, 0xff, 0x07, 0x00, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-   0xc0, 0xff, 0x01, 0xc0, 0xff, 0x03, 0xff, 0x0f, 0xf8, 0x3f, 0x00, 0x80,
-   0xff, 0x07, 0xfe, 0xff, 0xff, 0xff, 0x00, 0x80, 0xff, 0x03, 0xff, 0x07,
-   0x00, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0x01, 0xe0,
-   0xff, 0x83, 0xff, 0x07, 0xfc, 0x3f, 0x00, 0x80, 0xff, 0x07, 0xfe, 0xff,
-   0xff, 0x3f, 0x00, 0xc0, 0xff, 0x01, 0xff, 0x07, 0x00, 0xfe, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0x01, 0xe0, 0xff, 0x81, 0xff, 0x07,
-   0xfc, 0x3f, 0x00, 0x80, 0xff, 0x03, 0xfe, 0xff, 0xff, 0x07, 0x00, 0xe0,
-   0xff, 0x00, 0xff, 0x07, 0x00, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-   0xe0, 0xff, 0x00, 0xe0, 0xff, 0x81, 0xff, 0x07, 0xfc, 0x1f, 0x00, 0xc0,
-   0xff, 0x03, 0xff, 0xff, 0xff, 0x0f, 0x00, 0xe0, 0xff, 0x00, 0xff, 0x07,
-   0x00, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xe0, 0xff, 0x00, 0xf0,
-   0xff, 0x80, 0xff, 0x03, 0xfc, 0x1f, 0x00, 0xc0, 0xff, 0x03, 0xff, 0x0f,
-   0xff, 0x1f, 0x00, 0xf0, 0x7f, 0x00, 0xff, 0x07, 0x00, 0xfe, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0xff, 0xf0, 0xff, 0x00, 0xf0, 0xff, 0xc0, 0xff, 0x03,
-   0xfc, 0x1f, 0x00, 0xe0, 0xff, 0x01, 0xff, 0x0f, 0xfe, 0x3f, 0x00, 0xf8,
-   0x7f, 0x00, 0xff, 0x07, 0x00, 0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
-   0xf0, 0xff, 0x00, 0xf0, 0x7f, 0xc0, 0xff, 0x03, 0xfc, 0x1f, 0x00, 0xe0,
-   0xff, 0x01, 0xff, 0x07, 0xfe, 0x7f, 0x00, 0xf8, 0x3f, 0x00, 0xff, 0x07,
-   0x00, 0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x7f, 0x00, 0xff,
-   0x1f, 0xe0, 0xff, 0x01, 0xfc, 0x7f, 0x00, 0xfe, 0x3f, 0x80, 0xff, 0x03,
-   0xfc, 0xff, 0x00, 0xfe, 0x07, 0x00, 0xff, 0x07, 0x00, 0xf8, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x3f, 0xf8, 0xff, 0xff, 0xff, 0x0f, 0xe0, 0xff, 0x01,
-   0xfc, 0xff, 0x81, 0xff, 0x3f, 0xc0, 0xff, 0x03, 0xf8, 0xff, 0x00, 0xff,
-   0x07, 0x00, 0xff, 0x0f, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0x3f,
-   0xfc, 0xff, 0xff, 0xff, 0x0f, 0xe0, 0xff, 0x00, 0xfc, 0xff, 0xff, 0xff,
-   0x1f, 0xc0, 0xff, 0x03, 0xf8, 0xff, 0x80, 0xff, 0x03, 0x00, 0xff, 0x0f,
-   0x00, 0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x1f, 0xfc, 0xff, 0xff, 0xff,
-   0x07, 0xf0, 0xff, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x0f, 0xc0, 0xff, 0x01,
-   0xf8, 0xff, 0x81, 0xff, 0x03, 0x00, 0xff, 0x0f, 0x00, 0xf0, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x1f, 0xfc, 0xff, 0xff, 0xff, 0x03, 0xf0, 0xff, 0x00,
-   0xf8, 0xff, 0xff, 0xff, 0x07, 0xe0, 0xff, 0x01, 0xf0, 0xff, 0xc1, 0xff,
-   0x01, 0x00, 0xff, 0x0f, 0x00, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f,
-   0xfc, 0xff, 0xff, 0xff, 0x00, 0xf0, 0xff, 0x00, 0xf0, 0xff, 0xff, 0xff,
-   0x03, 0xe0, 0xff, 0x01, 0xf0, 0xff, 0xe1, 0xff, 0x00, 0x00, 0xff, 0x0f,
-   0x00, 0xc0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0xfe, 0xff, 0xff, 0x7f,
-   0x00, 0xf0, 0x7f, 0x00, 0xe0, 0xff, 0xff, 0xff, 0x00, 0xe0, 0xff, 0x01,
-   0xf0, 0xff, 0xe1, 0xff, 0x00, 0x00, 0xff, 0x0f, 0x00, 0xc0, 0xff, 0xff,
-   0xff, 0xff, 0xff, 0x07, 0xfe, 0xff, 0xff, 0x1f, 0x00, 0xf8, 0x7f, 0x00,
-   0xc0, 0xff, 0xff, 0x7f, 0x00, 0xe0, 0xff, 0x00, 0xf0, 0xff, 0xf3, 0x7f,
-   0x00, 0x00, 0xff, 0x0f, 0x00, 0x80, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03,
-   0xfe, 0xff, 0xff, 0x07, 0x00, 0xf8, 0x7f, 0x00, 0x80, 0xff, 0xff, 0x1f,
-   0x00, 0xf0, 0xff, 0x00, 0xe0, 0xff, 0xff, 0x7f, 0x00, 0x00, 0xff, 0x1f,
-   0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0xfe, 0xff, 0x7f, 0x00,
-   0x00, 0xf8, 0x7f, 0x00, 0x00, 0xfe, 0xff, 0x03, 0x00, 0xf0, 0xff, 0x00,
-   0xe0, 0xff, 0xff, 0x3f, 0x00, 0x00, 0xff, 0x1f, 0x00, 0x00, 0xfe, 0xff,
-   0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x80, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0xff, 0xff, 0xff, 0x7f, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xff,
-   0xff, 0xff, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0xff, 0xff, 0xff, 0x07, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc,
-   0xff, 0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xff, 0x1f, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00 
-  };
-
-
-
-#define diora2_width 256
-#define diora2_height 46
-static unsigned char diora2[] PROGMEM = {
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0xf0, 0xff, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xff, 0x3f,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0xe0, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0xff, 0xff, 0xff,
-   0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xff, 0x7f, 0x00, 0xc0,
-   0x7f, 0x00, 0x00, 0xf8, 0x0f, 0x00, 0x80, 0xff, 0xff, 0x3f, 0x00, 0x00,
-   0xfc, 0x1f, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0x0f, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x01, 0xe0, 0x7f, 0x00, 0xc0, 0xff,
-   0xff, 0x00, 0xc0, 0xff, 0xff, 0x7f, 0x00, 0x00, 0xfe, 0x1f, 0x00, 0x00,
-   0xfc, 0xff, 0xff, 0xff, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
-   0xff, 0xff, 0x03, 0xe0, 0x7f, 0x00, 0xf0, 0xff, 0xff, 0x01, 0xc0, 0xff,
-   0xff, 0xff, 0x01, 0x00, 0xfe, 0x1f, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff,
-   0x3f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x07, 0xf0,
-   0x3f, 0x00, 0xfc, 0xff, 0xff, 0x07, 0xe0, 0xff, 0xff, 0xff, 0x01, 0x00,
-   0xff, 0x1f, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x80, 0xff, 0xff, 0xff, 0x0f, 0xf0, 0x3f, 0x00, 0xff, 0xff,
-   0xff, 0x0f, 0xe0, 0xff, 0xff, 0xff, 0x03, 0x80, 0xff, 0x1f, 0x00, 0x80,
-   0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0xc0, 0xff, 0x00, 0xf0, 0x0f, 0xf0, 0x1f, 0xe0, 0x3f, 0x00,
-   0xf0, 0x1f, 0xf0, 0x1f, 0x00, 0xfe, 0x03, 0xe0, 0xcf, 0x1f, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0xff,
-   0x00, 0xf0, 0x0f, 0xf8, 0x1f, 0xf0, 0x3f, 0x00, 0xf0, 0x1f, 0xf0, 0x1f,
-   0x00, 0xfe, 0x01, 0xf0, 0xc7, 0x1f, 0x00, 0xc0, 0xff, 0xff, 0xff, 0xff,
-   0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x7f, 0x00, 0xf0, 0x0f, 0xf8,
-   0x0f, 0xf8, 0x1f, 0x00, 0xf0, 0x1f, 0xf8, 0x0f, 0x00, 0xff, 0x01, 0xf8,
-   0xc7, 0x1f, 0x00, 0xe0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00,
-   0x00, 0x00, 0xe0, 0x7f, 0x00, 0xf8, 0x0f, 0xf8, 0x0f, 0xf8, 0x0f, 0x00,
-   0xf8, 0x1f, 0xf8, 0x0f, 0x80, 0xff, 0x00, 0xf8, 0xc3, 0x1f, 0x00, 0xe0,
-   0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0xe0, 0x3f,
-   0x00, 0xf8, 0x07, 0xfc, 0x07, 0xfc, 0x07, 0x00, 0xf8, 0x0f, 0xfc, 0x07,
-   0x80, 0x7f, 0x00, 0xfc, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f,
-   0x00, 0xfc, 0x07, 0xfe, 0x03, 0xfe, 0x03, 0x00, 0xfc, 0x0f, 0xfc, 0xff,
-   0xff, 0x0f, 0x00, 0xff, 0xc0, 0x3f, 0x00, 0xf0, 0xff, 0xff, 0xff, 0xff,
-   0xff, 0x07, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, 0x00, 0xfc, 0x07, 0xfe,
-   0x03, 0xfe, 0x03, 0x00, 0xfc, 0x0f, 0xfe, 0xff, 0xff, 0x07, 0x80, 0x7f,
-   0xc0, 0x3f, 0x00, 0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00,
-   0x00, 0x00, 0xf8, 0x1f, 0x00, 0xfe, 0x03, 0xfe, 0x03, 0xfe, 0x03, 0x00,
-   0xfe, 0x07, 0xfe, 0xff, 0x7f, 0x00, 0xc0, 0x3f, 0xc0, 0x3f, 0x00, 0xf0,
-   0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x1f,
-   0x00, 0xfe, 0x03, 0xff, 0x01, 0xfe, 0x01, 0x00, 0xfe, 0x07, 0xfe, 0xe7,
-   0xff, 0x00, 0xe0, 0x3f, 0xc0, 0x3f, 0x00, 0xf0, 0xff, 0xff, 0xff, 0xff,
-   0xff, 0x07, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x1f, 0x00, 0xff, 0x01, 0xff,
-   0x01, 0xff, 0x01, 0x00, 0xff, 0x03, 0xff, 0x83, 0xff, 0x03, 0xe0, 0x1f,
-   0xc0, 0x3f, 0x00, 0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00,
-   0x00, 0x00, 0xf8, 0x0f, 0x00, 0xff, 0x00, 0xff, 0x00, 0xff, 0x01, 0x00,
-   0xff, 0x01, 0xff, 0x01, 0xff, 0x07, 0xf0, 0x0f, 0x00, 0x00, 0x00, 0xe0,
-   0xff, 0xff, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0xfc, 0x0f, 0xc0, 0x3f, 0x80, 0xff, 0x00, 0xfe, 0x03, 0xc0,
-   0xff, 0x00, 0xff, 0x01, 0xfe, 0x07, 0xfc, 0x03, 0xc0, 0x7f, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfe, 0x0f,
-   0xf0, 0x3f, 0x80, 0xff, 0x00, 0xfe, 0x1f, 0xf0, 0x7f, 0x80, 0xff, 0x01,
-   0xfe, 0x0f, 0xfe, 0x03, 0xc0, 0x7f, 0x00, 0xc0, 0xff, 0xff, 0xff, 0xff,
-   0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0xfe, 0xff, 0xff, 0x0f, 0xc0, 0x7f,
-   0x00, 0xfe, 0xff, 0xff, 0x3f, 0x80, 0xff, 0x00, 0xfe, 0x0f, 0xfe, 0x01,
-   0xc0, 0x7f, 0x00, 0x80, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00,
-   0x00, 0x00, 0xfe, 0xff, 0xff, 0x0f, 0xc0, 0x7f, 0x00, 0xfc, 0xff, 0xff,
-   0x0f, 0xc0, 0xff, 0x00, 0xfc, 0x0f, 0xff, 0x00, 0xc0, 0x7f, 0x00, 0x80,
-   0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff,
-   0xff, 0x07, 0xc0, 0x7f, 0x00, 0xfc, 0xff, 0xff, 0x07, 0xc0, 0xff, 0x00,
-   0xfc, 0x9f, 0xff, 0x00, 0xc0, 0x7f, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
-   0x7f, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x01, 0xe0, 0x3f,
-   0x00, 0xf8, 0xff, 0xff, 0x03, 0xe0, 0x7f, 0x00, 0xfc, 0xdf, 0x7f, 0x00,
-   0xc0, 0x7f, 0x00, 0x00, 0xfe, 0xff, 0xff, 0xff, 0x3f, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0xff, 0xff, 0x3f, 0x00, 0xe0, 0x3f, 0x00, 0xe0, 0xff, 0xff,
-   0x00, 0xe0, 0x7f, 0x00, 0xf8, 0xff, 0x3f, 0x00, 0xc0, 0x7f, 0x00, 0x00,
-   0xfc, 0xff, 0xff, 0xff, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0x0f, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff,
-   0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0xf0, 0xff, 0xff, 0xff, 0x07, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0xc0, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x7f,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0xfc, 0xff, 0x1f, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-   0x00, 0xc0, 0xff, 0x01, 0x00, 0x00, 0x00, 0x00
-  };
-
-
-
 
 // Funkcja odwracania bitów MSL-LSB <-> LSB-MSB
 uint32_t reverse_bits(uint32_t inval, int bits)
@@ -2446,9 +2275,59 @@ bool adcKeyboardEnabled = false;    // Flaga właczajaca działanie klawiatury A
 void displayDimmer(bool dimmerON);
 void displayDimmerTimer();
 void displayPowerSave(bool mode);
+void loadSDPlayerSessionState();
+void saveSDPlayerSessionState();
+void clearSDPlayerSessionCompleted();
+
+// ========== STORAGE ACCESS HELPER FOR EXTERNAL MODULES ==========
+// Funkcja pomocnicza dla modułów zewnętrznych (EQ16, SDPlayer, etc.)
+// która potrzebują dostępu do systemu plików
+fs::FS& getStorage() {
+  #ifdef AUTOSTORAGE
+    return STORAGE;  // W trybie AUTOSTORAGE zwraca SD lub LittleFS
+  #elif defined(USE_SD)
+    return SD;       // W trybie SD
+  #else
+    return LittleFS; // W trybie LittleFS
+  #endif
+}
+// ================================================================
 
 
+#ifdef AUTOSTORAGE
+  #define STORAGE_BEGIN() initStorage()
+  bool initStorage() 
+  {
+    if (SD.begin(SD_CS, customSPI)) 
+    {
+      _storage = &SD;
+      useSD = true;
+      storageTextName = "SD";
+      Serial.println("debug SD -> Uzywamy Karty SD");
+      //#define SD_LED 17          // LED - sygnalizacja CS, aktywność karty SD, klon pinu uzyteczny w przypadku uzywania tylnego czytnika SD na PCB
+      noSDcard = false;
+      return true;
+    }
 
+    Serial.println("debug SD -> Brak karty SD, przelaczam na LittleFS");
+    noSDcard = true; // Flag braku karty SD
+
+    if (LittleFS.begin(true)) 
+    {
+      _storage = &LittleFS;
+      useSD = false;
+      storageTextName = "LittleFS";
+      noSDcard = true;
+      return true;
+    }
+
+    Serial.println("debug SD -> BLAD: brak systemu plikow, zapis tylko podstawowych wartosci do EEPROM");
+    storageTextName = "EEPROM";
+    return false;
+  }
+#endif
+
+/*
 bool isValidUtf8(const String& str) 
 {
   const unsigned char* bytes = (const unsigned char*)str.c_str();
@@ -2476,6 +2355,7 @@ bool isValidUtf8(const String& str)
 
   return true;
 }
+*/
 
 void removeUtf8Bom(String &text) 
 {
@@ -2492,7 +2372,8 @@ void processText(String &text)
 {
   removeUtf8Bom(text); // Usuwamy znaki BOM na początku nazwy utworu
 
-  for (int i = 0; i < text.length() - 1; i++) {
+  for (int i = 0; i < text.length() - 1; i++) 
+  {
     if (i + 1 >= text.length()) break; // zabezpieczenie przed wyjściem poza bufor
 
     switch ((uint8_t)text[i]) {
@@ -2535,7 +2416,9 @@ void processText(String &text)
   }
 }
 
-void win1250ToUtf8(String& input) {
+/*
+void win1250ToUtf8(String& input) 
+{
   String output = "";
   const uint8_t* bytes = (const uint8_t*)input.c_str();
 
@@ -2575,100 +2458,173 @@ void win1250ToUtf8(String& input) {
 
   input = output; // <-- modyfikujemy oryginalny String
 }
+*/
+
+bool sanitizeUtf8(String& s)
+{
+  String out;
+  out.reserve(s.length() * 2);
+
+  const uint8_t* p = (const uint8_t*)s.c_str();
+
+  while (*p)
+  {
+    uint8_t c = *p;
+
+    // ASCII
+    if (c < 0x80) {
+      out += (char)c;
+      p++;
+      continue;
+    }
+
+    // Poprawny UTF-8 (2–4 bajty)
+    uint8_t len = 0;
+    if ((c & 0xE0) == 0xC0) len = 2;
+    else if ((c & 0xF0) == 0xE0) len = 3;
+    else if ((c & 0xF8) == 0xF0) len = 4;
+
+    if (len) {
+      bool ok = true;
+      for (uint8_t i = 1; i < len; i++) {
+        if ((p[i] & 0xC0) != 0x80) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        for (uint8_t i = 0; i < len; i++)
+          out += (char)p[i];
+        p += len;
+        continue;
+      }
+    }
+
+    // Win-1250 na UTF-8 (PL)
+    switch (c)
+    {
+      case 0xA5: out += "Ą"; break;
+      case 0xB9: out += "ą"; break;
+      case 0xC6: out += "Ć"; break;
+      case 0xE6: out += "ć"; break;
+      case 0xCA: out += "Ę"; break;
+      case 0xEA: out += "ę"; break;
+      case 0xA3: out += "Ł"; break;
+      case 0xB3: out += "ł"; break;
+      case 0xD1: out += "Ń"; break;
+      case 0xF1: out += "ń"; break;
+      case 0xD3: out += "Ó"; break;
+      case 0xF3: out += "ó"; break;
+      case 0xA6: out += "Ś"; break;
+      case 0xB6: out += "ś"; break;
+      case 0xAF: out += "Ż"; break;
+      case 0xBF: out += "ż"; break;
+      case 0xAC: out += "Ź"; break;
+      case 0xBC: out += "ź"; break;
+      case 0x8C: out += "Ś"; break;
+      case 0x9C: out += "ś"; break;
+      case 0x8F: out += "Ź"; break;
+      case 0x9F: out += "ź"; break;
+      default:   Serial.print("debug - > UTF8 Web Sanitizer, Nieznany znak:"); Serial.println(c, HEX); out += '?'; break;
+    }
+
+    p++;
+  }
+
+  if (out != s) {
+    s = out;
+    return true;   // coś poprawiono
+  }
+  return false;    // było OK
+}
+
+
+void wsStationChange(uint8_t stationId, uint8_t bankId) 
+{
+  // iteracja po wszystkich podłączonych klientach
+  for (auto& client : ws.getClients()) 
+  {
+ 
+    client.text("stationname:" + String(stationName.substring(0, stationNameLenghtCut)));
+
+    if (urlPlaying) 
+    {
+      client.text("bank:" + String(0));
+      client.text("station:" + String(0));
+    } 
+    else 
+    {
+      client.text("bank:" + String(bankId));
+      client.text("station:" + String(stationId));
+    }
+
+    client.text("volume:" + String(volumeValue));
+    client.text("mute:" + String(volumeMute)); 
+
+    client.text("bitrate:" + String(bitrateString)); 
+    client.text("samplerate:" + String(sampleRateString)); 
+    client.text("bitpersample:" + String(bitsPerSampleString)); 
+
+    if (mp3)    client.text("streamformat:MP3");
+    if (flac)   client.text("streamformat:FLAC");
+    if (aac)    client.text("streamformat:AAC");
+    if (vorbis) client.text("streamformat:VORBIS");
+    if (opus)   client.text("streamformat:OPUS");
+  }
+}
 
 void wsRefreshPage() // Funckja odswiezania strony za pomocą WebSocket
 {
   ws.textAll("reload");  // wyślij komunikat do wszystkich klientów
 }
 
-void wsStationChange(uint8_t stationId) 
-{
-  ws.textAll("stationname:" + String(stationName.substring(0, stationNameLenghtCut)));
-  
-  if (urlPlaying) {
-    ws.textAll("bank:" + String(0));
-    ws.textAll("station:" + String(0));
-  } else {
-    ws.textAll("bank:" + String(bank_nr));
-    ws.textAll("station:" + String(stationId));
-  }
-  
-  //ws.textAll("station:" + String(stationId));
-    
-  
-  ws.textAll("volume:" + String(volumeValue));
-  ws.textAll("mute:" + String(volumeMute)); 
-  
-  ws.textAll("bitrate:" + String(bitrateString)); 
-  ws.textAll("samplerate:" + String(sampleRateString)); 
-  ws.textAll("bitpersample:" + String(bitsPerSampleString)); 
-
-  if (mp3 == true) {ws.textAll("streamformat:MP3"); }
-  if (flac == true) {ws.textAll("streamformat:FLAC"); }
-  if (aac == true) {ws.textAll("streamformat:AAC"); }
-  if (vorbis == true) {ws.textAll("streamformat:VORBIS"); }
-  if (opus == true) {ws.textAll("streamformat:OPUS"); }
-}
-
 void wsStreamInfoRefresh()
-{ 
-  if (audio.isRunning() == true)
-  {  
-    if (f_debug_web_on)
-    { 
-      Serial.print("debug web -> ws.stationtext$: ");
-      Serial.println(stationStringWeb);
+{
+  // iteracja po wszystkich podłączonych klientach
+  for (auto& client : ws.getClients()) 
+  {
+ 
+    client.text("stationname:" + String(stationName.substring(0, stationNameLenghtCut)));
+
+    if (audio.isRunning() == true)
+    {  
+      sanitizeUtf8(stationStringWeb);
+      client.text("stationtext$" + stationStringWeb); 
+    }
+    else
+    {
+      client.text("stationtext$... No audio stream ! ...");
     }
 
-    if (isValidUtf8(stationStringWeb)) 
+    /*
+    if (urlPlaying) 
     {
-      if (f_debug_web_on) Serial.println("debug web -> stationStringWeb jest w UTF-8 - OK");
+      client.text("bank:" + String(0));
+      client.text("station:" + String(0));
     } 
     else 
     {
-      if (f_debug_web_on) Serial.println("stationStringWeb NIE jest w UTF-8 — potrzebna konwersja!");
-      win1250ToUtf8(stationStringWeb);    // Konwersja
+      client.text("bank:" + String(bank_nr));
+      client.text("station:" + String(station_nr));
     }
-  
-    if (f_debug_web_on)
-    { 
-      Serial.print("debug web -> after check ws.stationtext$: ");
-      Serial.println(stationStringWeb);
-    }  
-    
-    ws.textAll("stationtext$" + stationStringWeb);  // znak podziału to $ aby uniknac problemow z adresami http: separatorem |. Jako znak separacji uzyty $
+    */
+
+    //client.text("volume:" + String(volumeValue));
+    //client.text("mute:" + String(volumeMute)); 
+
+    client.text("bitrate:" + String(bitrateString)); 
+    client.text("samplerate:" + String(sampleRateString)); 
+    client.text("bitpersample:" + String(bitsPerSampleString)); 
+
+    if (mp3)    client.text("streamformat:MP3");
+    if (flac)   client.text("streamformat:FLAC");
+    if (aac)    client.text("streamformat:AAC");
+    if (vorbis) client.text("streamformat:VORBIS");
+    if (opus)   client.text("streamformat:OPUS");
   }
-  else
-  {
-    ws.textAll("stationtext$... No audio stream ! ...");
-  }
-  
-  if (urlPlaying) 
-  {
-    ws.textAll("bank:" + String(0));
-  } 
-  else 
-  {
-    ws.textAll("bank:" + String(bank_nr));
-  }
-
-
-
-  ws.textAll("stationname:" + String(stationName.substring(0, stationNameLenghtCut)));
-  
-  ws.textAll("bitrate:" + String(bitrateString)); 
-  ws.textAll("samplerate:" + String(sampleRateString)); 
-  ws.textAll("bitpersample:" + String(bitsPerSampleString)); 
-
-
-  if (mp3 == true) {ws.textAll("streamformat:MP3"); }
-  if (flac == true) {ws.textAll("streamformat:FLAC"); }
-  if (aac == true) {ws.textAll("streamformat:AAC"); }
-  if (vorbis == true) {ws.textAll("streamformat:VORBIS"); }
-  if (opus == true) {ws.textAll("streamformat:OPUS"); }
 }
 
-void wsVolumeChange(int newVolume) 
+void wsVolumeChange()  
 {
   ws.textAll("volume:" + String(volumeValue)); // wysyła wartosc volume do wszystkich połączonych klientów
   ws.textAll("mute:" + String(volumeMute)); // wysyła wartosc mute do wszystkich połączonych klientów
@@ -2701,6 +2657,7 @@ void saveStationToPSRAM(const char *station)
       // progress bar pobieranych stacji
       u8g2.setFont(spleen6x12PL);  
       u8g2.drawStr(21, 36, "Progress:");
+      //u8g2.drawStr(21, 36, "Loading: ");
       u8g2.drawStr(75, 36, String(stationsCount).c_str());  // Napisz licznik pobranych stacji
 
       u8g2.drawRFrame(21, 42, 212, 12, 3);  // Ramka paska postępu ladowania stacji stacji w>8 h>8
@@ -2800,6 +2757,7 @@ void readSDStations()
 }
 
 // Funkcja do pobierania listy stacji radiowych z serwera
+/*
 void fetchStationsFromServer() 
 {
   displayActive = true;
@@ -2822,11 +2780,8 @@ void fetchStationsFromServer()
  
   // Wybierz URL na podstawie bank_nr za pomocą switch
   switch (bank_nr) {
-    case 1:
-      url = STATIONS_URL1;
-      break;
-    case 2:
-      url = STATIONS_URL2;
+    case 1: url = STATIONS_URL1; break;
+    case 2: url = STATIONS_URL2;
       break;
     case 3:
       url = STATIONS_URL3;
@@ -2916,10 +2871,8 @@ void fetchStationsFromServer()
       //  return;  // Przerwij dalsze działanie, jeśli nie udało się utworzyć pliku
       }
     }
-    // Inicjalizuj żądanie HTTP do podanego adresu URL z timeout
+    // Inicjalizuj żądanie HTTP do podanego adresu URL
     http.begin(url);
-    http.setTimeout(3000); // 3 sekundy timeout dla szybkiego startu
-    http.setConnectTimeout(2000); // 2 sekundy na połączenie
 
     // Wykonaj żądanie GET i zapisz kod odpowiedzi HTTP
     int httpCode = http.GET();
@@ -2974,6 +2927,348 @@ void fetchStationsFromServer()
   wsRefreshPage(); // Po odczytaniu banku odswiezamy WebSocket aby zaktualizować strone www
   
 }
+*/
+
+/*
+void fetchStationsFromServer() 
+{
+  displayActive = true;
+  u8g2.setFont(spleen6x12PL);
+  u8g2.clearBuffer();
+  u8g2.setCursor(21, 23);
+  u8g2.print("Loading bank:" + String(bank_nr) + " stations from:");
+  u8g2.sendBuffer();
+
+  currentSelection = 0;
+  firstVisibleLine = 0;
+  station_nr = 1;
+  previous_bank_nr = bank_nr;
+
+  HTTPClient http;
+  String url;
+
+  switch (bank_nr) {
+    case 1:  url = STATIONS_URL1; break;
+    case 2:  url = STATIONS_URL2; break;
+    case 3:  url = STATIONS_URL3; break;
+    case 4:  url = STATIONS_URL4; break;
+    case 5:  url = STATIONS_URL5; break;
+    case 6:  url = STATIONS_URL6; break;
+    case 7:  url = STATIONS_URL7; break;
+    case 8:  url = STATIONS_URL8; break;
+    case 9:  url = STATIONS_URL9; break;
+    case 10: url = STATIONS_URL10; break;
+    case 11: url = STATIONS_URL11; break;
+    case 12: url = STATIONS_URL12; break;
+    case 13: url = STATIONS_URL13; break;
+    case 14: url = STATIONS_URL14; break;
+    case 15: url = STATIONS_URL15; break;
+    case 16: url = STATIONS_URL16; break;
+    case 17: url = STATIONS_URL17; break;
+    case 18: url = STATIONS_URL18; break;
+    default:
+      Serial.println("Nieprawidłowy numer banku");
+      return;
+  }
+
+  String fileName = String("/bank") + (bank_nr < 10 ? "0" : "") + String(bank_nr) + ".txt";
+
+  if (STORAGE.exists(fileName) && bankNetworkUpdate == false) 
+  {
+    Serial.println("debug SD -> Plik banku " + fileName + " już istnieje.");
+    u8g2.setFont(spleen6x12PL);
+    if (useSD) { u8g2.print("SD Card"); } 
+    else { u8g2.print("SPIFFS"); }
+    u8g2.sendBuffer();
+    
+    readSDStations();
+    wsRefreshPage();
+    return;
+  }
+
+  bankNetworkUpdate = false;
+
+  u8g2.print("GitHub");
+  u8g2.sendBuffer();
+
+  // Utwórz pusty plik (żeby mieć pewność, że istnieje)
+  {
+    File bankFile = STORAGE.open(fileName, FILE_WRITE);
+    if (bankFile) {
+      Serial.println("debug SD -> Utworzono plik banku: " + fileName);
+      bankFile.close();
+    } else {
+      Serial.println("debug SD -> Błąd tworzenia pliku: " + fileName);
+    }
+  }
+
+  // ---- START NOWEGO BEZPIECZNEGO POBIERANIA ----
+
+  Serial.println("debug http -> Pobieram URL: " + url);
+
+  http.begin(url);
+  http.setUserAgent("ESP32-WebRadio");
+
+  int httpCode = http.GET();
+  Serial.print("debug http -> Kod odpowiedzi HTTP: ");
+  Serial.println(httpCode);
+
+  // Obsługa redirectów 301/302
+  if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
+    String newUrl = http.getLocation();
+    Serial.println("debug http -> Redirect na: " + newUrl);
+    http.end();
+
+    http.begin(newUrl);
+    http.setUserAgent("ESP32-WebRadio");
+    httpCode = http.GET();
+    Serial.println("debug http -> Kod HTTP po redirect: " + String(httpCode));
+  }
+
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.println("debug http -> Błąd pobierania, kod: " + String(httpCode));
+    http.end();
+    return;
+  }
+
+  // Pobieranie strumieniowe (super stabilne)
+  WiFiClient *stream = http.getStreamPtr();
+  File bankFile = STORAGE.open(fileName, FILE_WRITE);
+
+  if (!bankFile) {
+    Serial.println("debug SD -> Błąd otwarcia pliku do zapisu!");
+    http.end();
+    return;
+  }
+
+  uint8_t buffer[256];
+  int total = 0;
+  int len = http.getSize();
+
+  while (http.connected() && (len > 0 || len == -1)) {
+    size_t sizeAvail = stream->available();
+    if (sizeAvail) {
+      int c = stream->readBytes(buffer, min((int)sizeAvail, 256));
+      bankFile.write(buffer, c);
+      total += c;
+      if (len > 0) len -= c;
+    }
+    delay(1);
+  }
+
+  bankFile.close();
+  http.end();
+
+  Serial.println("debug SD -> Zapisano " + String(total) + " bajtów");
+
+  // Jeśli plik jest pusty → usuń
+  File check = STORAGE.open(fileName, FILE_READ);
+  if (check && check.size() == 0) {
+    Serial.println("debug SD -> BŁĄD: pobrany plik ma 0 KB -> usuwam");
+    check.close();
+    STORAGE.remove(fileName);
+    return;
+  }
+  check.close();
+
+  // ----- PARSOWANIE (Twój kod – zostawiłem) -----
+
+  File fileRead = STORAGE.open(fileName, FILE_READ);
+  if (!fileRead) {
+    Serial.println("debug SD -> Nie mogę otworzyć pliku po pobraniu");
+    return;
+  }
+
+  String payload = fileRead.readString();
+  fileRead.close();
+
+  int startIndex = 0;
+  int endIndex;
+  stationsCount = 0;
+
+  while ((endIndex = payload.indexOf('\n', startIndex)) != -1 && stationsCount < MAX_STATIONS) {
+    String station = payload.substring(startIndex, endIndex);
+    if (!station.isEmpty()) sanitizeAndSaveStation(station.c_str());
+    startIndex = endIndex + 1;
+  }
+
+  wsRefreshPage();
+}
+*/
+
+void fetchStationsFromServer() 
+{
+  displayActive = true;
+  u8g2.setFont(spleen6x12PL);
+  u8g2.clearBuffer();
+  u8g2.setCursor(21, 23);
+  u8g2.print("Loading bank:" + String(bank_nr) + " from:");
+  u8g2.sendBuffer();
+
+  currentSelection = 0;
+  firstVisibleLine = 0;
+  station_nr = 1;
+  previous_bank_nr = bank_nr; // jesli ładujemy stacje to ustawiamy zmienna previous_bank
+
+  HTTPClient http; // Utwórz obiekt klienta HTTP
+  String url; // URL stacji dla danego banku
+
+  // ---------------------- WYBÓR URL BANKU ----------------------
+  switch (bank_nr) 
+  {
+    case 1:  url = STATIONS_URL1; break;
+    case 2:  url = STATIONS_URL2; break;
+    case 3:  url = STATIONS_URL3; break;
+    case 4:  url = STATIONS_URL4; break;
+    case 5:  url = STATIONS_URL5; break;
+    case 6:  url = STATIONS_URL6; break;
+    case 7:  url = STATIONS_URL7; break;
+    case 8:  url = STATIONS_URL8; break;
+    case 9:  url = STATIONS_URL9; break;
+    case 10: url = STATIONS_URL10; break;
+    case 11: url = STATIONS_URL11; break;
+    case 12: url = STATIONS_URL12; break;
+    case 13: url = STATIONS_URL13; break;
+    case 14: url = STATIONS_URL14; break;
+    case 15: url = STATIONS_URL15; break;
+    case 16: url = STATIONS_URL16; break;
+    case 17: url = STATIONS_URL17; break;
+    case 18: url = STATIONS_URL18; break;
+    default:
+      Serial.println("Nieprawidłowy numer banku");
+      return;
+  }
+
+  // Tworzenie nazwy pliku dla danego banku
+  String fileName = String("/bank") + (bank_nr < 10 ? "0" : "") + String(bank_nr) + ".txt";
+
+  // ---------------------- JEŚLI PLIK ISTNIEJE ----------------------
+  if (STORAGE.exists(fileName) && bankNetworkUpdate == false) 
+  {
+    Serial.println("debug SD -> Plik banku " + fileName + " już istnieje.");
+    //if (useSD) { u8g2.print("SD Card"); } else { u8g2.print("SPIFFS"); }
+    u8g2.print(storageTextName); 
+    u8g2.sendBuffer();
+
+    readSDStations(); // Jesli dany plik banku istnieje to odczytujemy go TYLKO z karty
+    wsRefreshPage();
+    return;
+  }
+
+  bankNetworkUpdate = false;
+
+  u8g2.print("GitHub");
+  u8g2.sendBuffer();
+
+  // ---------------------- TWORZENIE PUSTEGO PLIKU ----------------------
+  {
+    File bankFile = STORAGE.open(fileName, FILE_WRITE);
+    if (bankFile) 
+    {
+      Serial.println("debug SD -> Utworzono plik banku: " + fileName);
+      bankFile.close(); // Zamykanie pliku po utworzeniu
+    } 
+    else 
+    {
+      Serial.println("debug SD -> Błąd tworzenia pliku: " + fileName);
+    }
+  }
+
+  // ---------------------- POBIERANIE DANYCH HTTP ----------------------
+
+  Serial.println("debug http -> Pobieram URL: " + url);
+
+  http.begin(url); // Inicjalizuj żądanie HTTP do podanego adresu URL
+  http.setUserAgent("ESP32-WebRadio");   // ustaweinie userAgent
+  
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.useHTTP10(true);                 // <<< NAJWAŻNIEJSZE
+  http.addHeader("Connection", "close");
+  
+  http.setTimeout(5000);                // 5 sekund timeout
+  
+  http.setConnectTimeout(3000);
+
+  int httpCode = http.GET();  
+  Serial.print("debug http -> Kod HTTP: ");
+  Serial.println(httpCode); // Wydrukuj dodatkowe informacje o kodzie http
+
+  // ----------- OBSŁUGA REDIRECTÓW 301 / 302 (GitHub to często robi!) -----------
+  if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) // jesli GitHub ustawił redirect
+  {
+    String newUrl = http.getLocation();
+    Serial.println("debug http -> Redirect: " + newUrl);
+
+    http.end();
+
+    http.begin(newUrl);
+    http.setUserAgent("ESP32-WebRadio");
+  
+    http.useHTTP10(true);                 // <<< NAJWAŻNIEJSZE
+    http.addHeader("Connection", "close");
+    
+    http.setTimeout(5000);                // 5 sekund timeout
+  
+    http.setConnectTimeout(3000);
+
+    httpCode = http.GET();
+    Serial.println("debug http -> Kod HTTP po redirect: " + String(httpCode));
+  }
+
+  // ---------------------- NIE UDAŁO SIĘ POBRAĆ ----------------------
+  if (httpCode != HTTP_CODE_OK) 
+  {
+    Serial.printf("debug http -> Błąd pobierania. Kod HTTP: %d\n", httpCode);
+    http.end();
+    return;
+  }
+
+  // ---------------------- POBRANIE GETSTRING ----------------------
+  String payload = http.getString();
+
+  Serial.println("debug http -> Długość pobranych danych: " + String(payload.length()));
+
+  // Zabezpieczenie przed pustym stringiem
+  if (payload.length() == 0) 
+  {
+    Serial.println("debug http -> BŁĄD! Pobieranie zwróciło pusty payload. Usuwam plik.");
+    STORAGE.remove(fileName);
+    http.end();
+    return;
+  }
+
+  // ---------------------- ZAPIS DO PLIKU ----------------------
+  File bankFile = STORAGE.open(fileName, FILE_WRITE);
+  if (bankFile) 
+  {
+    bankFile.print(payload);
+    bankFile.close();
+    Serial.println("debug SD -> Dane zapisane do pliku: " + fileName);
+  } 
+  else 
+  {
+    Serial.println("debug SD -> Błąd: Nie można otworzyć pliku do zapisu!");
+  }
+
+  http.end();
+
+  // ---------------------- SANITYZACJA STACJI  ----------------------
+  int startIndex = 0;
+  int endIndex;
+  stationsCount = 0;
+
+  while ((endIndex = payload.indexOf('\n', startIndex)) != -1 && stationsCount < MAX_STATIONS) 
+  {
+    String station = payload.substring(startIndex, endIndex);
+    if (!station.isEmpty())
+      sanitizeAndSaveStation(station.c_str());
+
+    startIndex = endIndex + 1;
+  }
+
+  wsRefreshPage();
+}
+
 
 void readEEPROM() // Funkcja kontrolna DEBUG odczytu EEPROMu, nie uzywan przez inne funkcje
 {
@@ -3008,9 +3303,6 @@ void calcNec() // Funkcja umozliwajaca przeliczanie odwrotne aby "udawac" przyci
   ir_code = (ir_code << 8) | CMD;
   ir_code = reverse_bits(ir_code,32);     // rotacja bitów do porządku LSB-MSB jak w NEC        
 }
-
-
-
 
 
 // Funkcja formatowania dla scorllera stationString/stationName  **** stationStringScroll ****
@@ -3124,7 +3416,7 @@ void stationStringFormatting()
       stationStringScroll = stationString;
     }  
   }
-  else if (displayMode == 3) //|| displayMode == 5 Tryb wświetlania mode 3 i mode 5 (małe spectrum)
+  else if (displayMode == 3) //|| displayMode == 8 Tryb wświetlania mode 3 i mode 8 (małe spectrum)
   {
     if (stationString == "") // Jeżeli stationString jest pusty i stacja go nie nadaje to podmieniamy pusty stationString na nazwę staji - stationNameStream
     {    
@@ -3178,15 +3470,47 @@ void stationStringFormatting()
     //Serial.print(stationStringScroll);
     //Serial.println("@");
   }
-  
+  // Styl 5: Analyzer mode
+  else if (displayMode == 8)
+  {   
+    if (stationString == "") // Jeżeli stationString jest pusty i stacja go nie nadaje to podmieniamy pusty stationString na nazwę staji - stationNameStream
+    {    
+      if (stationNameStream == "") // jezeli nie ma równiez stationName to wstawiamy 3 kreseczki
+      { 
+        stationStringScroll = "---" ;
+        stationStringWeb = "---" ;
+      } 
+      else // jezeli jest station name to prawiamy w "-- NAZWA --" i wysylamy do scrollera
+      { 
+        stationStringScroll = ("-- " + stationNameStream + " --");
+        stationStringWeb = ("-- " + stationNameStream + " --");
+      }  // Zmienna stationStringScroller przyjmuje wartość stationNameStream
+    }
+    else // Jezeli stationString zawiera dane to przypisujemy go do stationStringScroll do funkcji scrollera
+    {
+      stationStringWeb = stationString;
+      processText(stationString);  // przetwarzamy polsie znaki
+      stationStringScroll = stationString + "    "; // dodajemy separator do przewijanego tekstu jesli się nie miesci na ekranie
+    }             
+    
+    stationStringScrollWidth = stationStringScroll.length() * 6;
+  }
+
 }
 
 // Obsługa wyświetlacza dla odtwarzanego strumienia radia internetowego
 void displayRadio() 
 {
-  // GUARD: Nie rysuj ekranu radia gdy SDPlayer jest aktywny
+  // KRYTYCZNE: Blokuj displayRadio() gdy SDPlayer jest aktywny
+  if (sdPlayerOLEDActive) {
+    // Serial.println("[displayRadio] BLOCKED - SDPlayer active");
+    return;
+  }
+  
+  // DODATKOWA BLOKADA: Sprawdź czy obiekt SDPlayer OLED nie jest aktywny
   if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
-    return; // SDPlayer kontroluje wyświetlacz
+    Serial.println("[displayRadio] BLOCKED - g_sdPlayerOLED->isActive() == true");
+    return;
   }
   
   int StationNameEnd = stationName.indexOf("  "); // Wycinamy nazwe stacji tylko do miejsca podwojnej spacji 
@@ -3242,10 +3566,15 @@ void displayRadio()
       u8g2.drawStr(195,59, "z");
     }
     
-    // Ikona statusu Bluetooth
-    // BT_drawStatusIcon(u8g2, 200, 63);
-    
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
+    
+    // Wskaźnik nagrywania (REC) w górnym prawym rogu
+    if (g_sdRecorder && g_sdRecorder->isRecording()) {
+      u8g2.setFont(spleen6x12PL);
+      u8g2.drawStr(220, 12, "\x07REC");  // \x07 to kropka/bullet
+      u8g2.drawCircle(223, 9, 3);         // Czerwona kropka (animacja)
+    }
+    
     u8g2.drawLine(0, 52, 255, 52); // Dolna linia rozdzielajaca
     
     u8g2.setFont(spleen6x12PL); 
@@ -3272,9 +3601,6 @@ void displayRadio()
       
     }
     
-    // Ikona statusu Bluetooth w trybie Mode 1 (Clock)
-    // BT_drawStatusIcon(u8g2, 180, 47);
-    
     // --- GŁOSNIKCZEK I POZIOM GŁOSOSCI ---
     u8g2.setFont(spleen6x12PL);
     u8g2.drawGlyph(215,47, 0x9E); // 0x9E w czionce Spleen to zakodowany symbol głosniczka
@@ -3282,8 +3608,68 @@ void displayRadio()
 
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera  
   }
-  
-  else if (displayMode == 2) // 3 LINIE - Tryb wświetlania mode 2 - 3 linijki tekstu, bez przewijania-scroll
+  // Style 6-10: Analizatory spectrum (podobna obsługa jak styl 5)
+  else if (displayMode >= 6 && displayMode <= 10)
+  {
+    u8g2.clearBuffer();
+    u8g2.drawLine(128,0,128,64);
+    
+    u8g2.drawLine(13,5,46,5); 
+    u8g2.drawLine(82,5,115,5);
+    
+    u8g2.setFont(spleen6x12PL);
+    int stationNameWidth = u8g2.getStrWidth(stationName.substring(0, stationNameLenghtCut - 2).c_str());
+    int stationNamePositionX = (127 - stationNameWidth) / 2;
+    u8g2.drawStr(stationNamePositionX, 22, stationName.substring(0, stationNameLenghtCut - 2).c_str());
+    
+    u8g2.setFont(u8g2_font_04b_03_tr);
+    char BankStr[8];  
+    char StationNrStr[3];
+    snprintf(BankStr, sizeof(BankStr), "%02d", bank_nr);
+    snprintf(StationNrStr, sizeof(StationNrStr), "%02d", station_nr);
+    
+    u8g2.drawRBox(0, 0, 13, 10, 3);
+    u8g2.drawRBox(115, 0, 13, 10, 3);
+    
+    if (!urlPlaying) 
+    {
+      u8g2.setDrawColor(0);
+      u8g2.setCursor(117,8);
+      u8g2.print(BankStr);
+    }
+    
+    if (!urlPlaying) 
+    {
+      u8g2.setCursor(2, 8);
+      u8g2.print(StationNrStr);
+    } 
+    else 
+    {
+      u8g2.setCursor(1, 10);
+      u8g2.setFont(spleen6x12PL);
+      u8g2.print("URL");
+    }
+    u8g2.setDrawColor(1);
+    
+    // PRZEKREŚLONY GŁOŚNIK PRZY MUTE (w górnym pasku)
+    if (volumeMute) {
+      u8g2.setFont(spleen6x12PL);
+      u8g2.drawGlyph(60, 10, 0x9E); // Głośnik w środku górnego paska
+      u8g2.drawLine(55, 0, 70, 12); // Linia przekreślająca /
+    }
+    
+    if (f_sleepTimerOn) 
+    {
+      u8g2.setFont(u8g2_font_04b_03_tr); 
+      u8g2.drawStr(189,63, "z");
+      u8g2.drawStr(192,61, "z");
+      u8g2.drawStr(195,59, "z");
+    }
+    
+    stationStringFormatting();
+  }
+  // Styl 2: Nazwa stacji na górze z numerem stacji i banku
+  else if (displayMode == 2)
   {
     u8g2.clearBuffer();
     u8g2.setFont(spleen6x12PL);
@@ -3327,9 +3713,6 @@ void displayRadio()
       u8g2.drawStr(192,61, "z");
       u8g2.drawStr(195,59, "z");
     }
-    
-    // Ikona statusu Bluetooth w trybie Mode 2 (3 linie)
-    // BT_drawStatusIcon(u8g2, 200, 63);
 
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
 
@@ -3339,71 +3722,87 @@ void displayRadio()
     String displayString = String(SampleRate) + "." + String(SampleRateRest) + "kHz " + bitsPerSampleString + "bit " + bitrateString + "kbps";
     u8g2.drawStr(0, 63, displayString.c_str());  
   }
+  
   else if (displayMode == 3) // Tryb wświetlania mode 3 - linijka statusu (stacja, bank godzina) na gorze i na dole (format stream, wifi zasieg)
   {
-    
     u8g2.clearBuffer();
-    u8g2.setFont(spleen6x12PL);
-    if (!urlPlaying) {u8g2.drawStr(0,10, "BANK:");}
-    
-    // Logo FLAC/MP3/AAC... w górnej belce, dla FLAC/VORBIS/OPUS malujemy na białym tle szerszą belke
-    if (flac == true || opus == true) 
-    {
-      if (u8g2.getStrWidth(bitrateString.c_str()) > 20) {u8g2.drawFrame(49,2,41,9);}  // 128 ->18px, regulujemy ranke w zaleznosci czy bitrate ma 4 czy 3 cyfry
-      else { u8g2.drawFrame(49,2,38,9);;}
-      
-      u8g2.drawBox(49,2,20,9);
-      u8g2.setFont(u8g2_font_04b_03_tr);
-      u8g2.setDrawColor(0);
-      u8g2.drawStr(51,9, streamCodec.c_str());
-      u8g2.setDrawColor(1);
-      u8g2.drawStr(71,9, bitrateString.c_str());
-    } else {
-      u8g2.drawFrame(50,2,38,9);
-      u8g2.drawBox(50,2,20,9);
-      u8g2.setFont(u8g2_font_04b_03_tr);
-      u8g2.setDrawColor(0);
-      u8g2.drawStr(53,9, streamCodec.c_str());
-      u8g2.setDrawColor(1);
-      u8g2.drawStr(72,9, bitrateString.c_str());
-    }
-
-    // Jesli sleep timer właczony to rysujemy 3 literki zzz jako timer.
+        
+    //-- "IKONA" SLEEP TIMER -- 
     if (f_sleepTimerOn)
     {
       u8g2.setFont(u8g2_font_04b_03_tr); 
-      u8g2.drawStr(163,10, "z");
-      u8g2.drawStr(166,8, "z");
-      u8g2.drawStr(169,6, "z");
+      u8g2.drawStr(165,10, "z");
+      u8g2.drawStr(168,8, "z");
+      u8g2.drawStr(171,6, "z");
     }
     
-    // Ikona statusu Bluetooth w trybie Mode 3 (górna belka)
-    // BT_drawStatusIcon(u8g2, 230, 10);
-    
+    // -- IKONA VOLUME I WARTOSC --    
     u8g2.setFont(spleen6x12PL);
-    if (!urlPlaying) {u8g2.drawStr(98,10, "STATION:");} else {u8g2.drawStr(98,10, "  URL   ");}
-    
     u8g2.drawGlyph(180,10, 0x9E); // 0x9E w czionce Spleen to zakodowany symbol głosniczka
-    u8g2.drawStr(189,10, String(volumeValue).c_str());
+    u8g2.drawStr(189,10, String(volumeValue).c_str());        
     
-    if (!urlPlaying) // Jesli numer nie jest 0 czy nie gramy z URL wyslanym ze strony www
-    {
-      // Funkcja wyswietlania numeru Banku
-      char BankStr[8];  
-      snprintf(BankStr, sizeof(BankStr), "%02d", bank_nr); // Formatujemy numer banku do postacji 00
-      u8g2.setCursor(30, 10);  // Pozycja napisu Bank0x na gorze ekranu
-      u8g2.print(BankStr);
-    }  
     
-    if (!urlPlaying) // Jesli numer nie jest 0 czy nie gramy z URL wyslanym ze strony www
+    // -- LOGO FLAC/MP3/AACi BITRATE --
+    u8g2.setFont(mono04b03b); // szerokosc 5, wysokosc 6
+    uint8_t x_codec = 103;  // Koordynata X dla informacji o kodeku
+    
+    if (!f_simpleMode3) {x_codec = 47;}
+    
+    if (flac == true || opus == true) 
     {
-      char StationNrStr[3];
-      snprintf(StationNrStr, sizeof(StationNrStr), "%02d", station_nr);  //Formatowanie informacji o stacji i banku do postaci 00
-      u8g2.setCursor(146, 10);                                            // Pozycja numeru stacji na gorze po lewej ekranu
-      u8g2.print(StationNrStr);
-    }    
+      if (u8g2.getStrWidth(bitrateString.c_str()) > 19) {u8g2.drawFrame(x_codec,2,45,9);}  // 128 ->18px, regulujemy ranke w zaleznosci czy bitrate ma 4 czy 3 cyfry
+      else { u8g2.drawFrame(x_codec,2,39,9);}
+      
+      u8g2.drawBox(x_codec+1,2,21,9);
+      u8g2.setDrawColor(0);
+      u8g2.drawStr(x_codec+2,9, streamCodec.c_str());
+      u8g2.setDrawColor(1);
+      u8g2.drawStr(x_codec+23,9, bitrateString.c_str());
+    } else 
+    {
+      u8g2.drawFrame(x_codec+6,2,38,9);
+      u8g2.drawBox(x_codec+6,2,19,9);
+      u8g2.setDrawColor(0);
+      u8g2.drawStr(x_codec+8,9, streamCodec.c_str());
+      u8g2.setDrawColor(1);
+      u8g2.drawStr(x_codec+27,9, bitrateString.c_str());
+    }
+
+    // -- WYSWIETL NUMER BANKU i STACJI --
+    u8g2.setFont(spleen6x12PL);
+    u8g2.setCursor(1, 10);
+    
+    if (!urlPlaying) // Jesli nie gramy z adresu URL wyslanego ze strony www
+    {       
+      char StationNrStr[3]; snprintf(StationNrStr, sizeof(StationNrStr), "%02d", station_nr);  //Formatowanie informacji o stacji i banku do postaci 00
+      
+      if (f_simpleMode3)
+      {
+        char BankStr[8]; snprintf(BankStr, sizeof(BankStr), "%1d", bank_nr); // Formatujemy numer banku
+        u8g2.print("CH.");   
+        u8g2.print(BankStr);
+        //u8g2.print(".");
+        u8g2.setFont(spleen6x12PL);
+        u8g2.print(StationNrStr);
+      }
+      else
+      {
+        char BankStr[8]; snprintf(BankStr, sizeof(BankStr), "%02d", bank_nr); // Formatujemy numer banku do postacji 00
+        u8g2.print("BANK:");
+        u8g2.print(BankStr);     
+        u8g2.setCursor(99, 10);
+        u8g2.print("STATION:");
+        u8g2.print(StationNrStr);
+      }
+    }
+    else
+    { 
+      if (f_simpleMode3) {u8g2.print("URL");} else {u8g2.setCursor(119, 10); u8g2.print("URL");}
+    }
+   
     //u8g2.setFont(u8g2_font_helvB14_tr);
     //u8g2.setFont(u8g2_font_fub14_tr);
+    //u8g2.setFont(u8g2_font_smart_patrol_nbp_tf);
     u8g2.setFont(u8g2_font_UnnamedDOSFontIV_tr);
     int stationNameWidth = u8g2.getStrWidth(stationName.substring(0, stationNameLenghtCut).c_str()); // Liczy pozycje aby wyswietlic stationName na wycentrowane środku
     int stationNamePositionX = (256 - stationNameWidth) / 2;
@@ -3418,107 +3817,95 @@ void displayRadio()
     u8g2.clearBuffer();
     u8g2.setFont(spleen6x12PL);
   }
+  else if (displayMode == 8) // Analyzer - VU Meter Mode 8 (był 5)
+  {
+    u8g2.clearBuffer();
+    u8g2.setFont(spleen6x12PL);
+       
+
+    int stationNameWidth = u8g2.getStrWidth(stationName.substring(0, stationNameLenghtCut - 2).c_str()); // Liczy pozycje aby wyswietlic stationName na wycentrowane środku
+    int stationNamePositionX = (127 - stationNameWidth) / 2;
+    u8g2.drawStr(stationNamePositionX, 22, stationName.substring(0, stationNameLenghtCut - 2).c_str());
+        
+    // Funkcja wyswietlania numeru Banku na dole ekranu
+    //u8g2.setFont(spleen6x12PL);
+    //u8g2.setFont(mono04b03b);
+    u8g2.setFont(u8g2_font_04b_03_tr);
+    char BankStr[8];  
+    char StationNrStr[3];
+    snprintf(BankStr, sizeof(BankStr), "%02d", bank_nr); // Formatujemy numer banku do postacji 00
+    snprintf(StationNrStr, sizeof(StationNrStr), "%02d", station_nr);  //Formatowanie informacji o stacji i banku do postaci 00
+        
+    u8g2.drawRBox(0, 0, 13, 10, 3);  // Biały kwadrat (tło) pod numerem stacji
+    u8g2.drawRBox(115, 0, 13, 10, 3);  // Biały kwadrat (tło) pod numerem stacji
+    if (!urlPlaying) 
+    {
+      //u8g2.drawBox(87, 58, 1, 5);  // dorysowujemy 1px pasek przed napisem "Bank" dla symetrii
+      u8g2.setDrawColor(0);
+      //u8g2.setCursor(88,63);  // Pozycja napisu Bank0x na dole ekranu
+      u8g2.setCursor(117,8);  // Pozycja napisu Bank0x na dole ekranu
+      u8g2.print(BankStr);
+    }
+    //u8g2.setDrawColor(1);
+       
+    // Pozycja numeru stacji na gorze po lewej ekranu
+    if (!urlPlaying) 
+    {
+      //u8g2.setFont(spleen6x12PL);
+      u8g2.setCursor(2, 8);
+      //u8g2.print("Station:");  
+      u8g2.print(StationNrStr);
+    } 
+    else 
+    {
+      u8g2.setCursor(1, 10);
+      u8g2.setFont(spleen6x12PL);
+      u8g2.print("URL");
+    }
+    u8g2.setDrawColor(1);
+      
+    // Logo 3xZZZ w trybie dla timera SLEEP
+    if (f_sleepTimerOn) 
+    {
+      u8g2.setFont(u8g2_font_04b_03_tr); 
+      u8g2.drawStr(189,63, "z");
+      u8g2.drawStr(192,61, "z");
+      u8g2.drawStr(195,59, "z");
+    }
     
+    stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
+    u8g2.drawLine(0, 54, 127, 54); // Dolna linia rozdzielajaca
+    
+    
+    
+    u8g2.setFont(u8g2_font_04b_03_tr); 
+    //u8g2.drawStr(42, 63, String(bitrateString + "k").c_str());
+    //u8g2.drawStr(65, 63, streamCodec.c_str()); // dopisujemy kodek minimalnie przesuniety o 1px aby zmiescil sie napis numeru banku
+       
+
+    String displayString = String(SampleRate) + "." + String(SampleRateRest) + "kHz " + bitsPerSampleString +"bit " + bitrateString + "kbps  ";
+    //u8g2.setFont(u8g2_font_04b_03_tr);
+    u8g2.setCursor(0, 63);
+    //u8g2.drawStr(0, 63, displayString.c_str());
+    u8g2.print(displayString);
+
+    u8g2.setFont(mono04b03b);
+    u8g2.print(String(streamCodec));
+    
+    // PRZEKREŚLONY GŁOŚNIK PRZY MUTE (w górnym pasku)
+    if (volumeMute) {
+      u8g2.setFont(spleen6x12PL);
+      u8g2.drawGlyph(60, 10, 0x9E); // Głośnik w środku górnego paska
+      u8g2.drawLine(55, 0, 70, 12); // Linia przekreślająca /
+    }
+
+  }
+
+
 }
 
 
 // Obsługa callbacka info o audio dla bibliteki 3.4.1 i nowszej.
-// Audio processing callback - called before i2s_write with PCM samples
-// Function to apply current equalizer settings
-void applyEqualizerSettings() {
-  if (useEQ16 && EQ16_isEnabled()) {
-    // Use 16-band EQ16 system - disable 3-point EQ
-    audio.setTone(0, 0, 0);  // Reset 3-point EQ to neutral
-    Serial.println("DEBUG: Applied EQ16 settings - 3-point EQ disabled, 16-band processing enabled");
-  } else {
-    // Use 3-point equalizer system
-    audio.setTone(toneLowValue, toneMidValue, toneHiValue);
-    Serial.printf("DEBUG: Applied 3-point EQ - Low:%d Mid:%d High:%d - 16-band processing disabled\n", toneLowValue, toneMidValue, toneHiValue);
-  }
-}
-
-// Function to switch between EQ systems
-void switchEqualizerSystem() {
-  // Close any active menus
-  if (eq16MenuActive) {
-    EQ16_setMenuActive(false);
-    eq16MenuActive = false;
-  }
-  if (equalizerMenuEnable) {
-    equalizerMenuEnable = false;
-  }
-  
-  // Switch system
-  useEQ16 = !useEQ16;
-  
-  // Apply new settings
-  applyEqualizerSettings();
-  
-  // Save configuration to remember EQ system preference
-  saveConfig();
-  
-  Serial.printf("DEBUG: Switched to %s equalizer system\n", useEQ16 ? "EQ16 (16-band)" : "3-point");
-  
-  // Show brief message on display
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_ncenB10_tr);
-  u8g2.drawStr(10, 25, useEQ16 ? "EQ16 SYSTEM" : "3-POINT EQ");
-  u8g2.drawStr(10, 45, "ACTIVATED");
-  u8g2.sendBuffer();
-  delay(1500);
-  displayRadio();  // Return to main display
-}
-
-void audio_process_i2s(int16_t* outBuff, int32_t validSamples, bool* continueI2S)
-{
-  // Push audio samples to EQ analyzer (validSamples is number of stereo frames)
-  eq_analyzer_push_samples_i16((const int16_t*)outBuff, validSamples);
-  
-  // Używamy domyślnie 3-punktowego equalizera z audio.setTone() - bez EQ16
-  // EQ16 pozostaje wyłączony domyślnie dla lepszej wydajności procesora
-  if (false && useEQ16 && EQ16_isEnabled()) {
-    // EQ16 processing - wyłączone domyślnie
-    
-    // outBuff format: [L0,R0,L1,R1,L2,R2...] (interleaved stereo)
-    // validSamples = number of stereo frames (pairs)
-    
-    for (int32_t i = 0; i < validSamples; i++) {
-      // Convert to float
-      float leftFloat = (float)outBuff[i * 2] / 32768.0f;      // L channel
-      float rightFloat = (float)outBuff[i * 2 + 1] / 32768.0f; // R channel
-      
-      // Process through EQ16 - apply filters to each channel
-      leftFloat = EQ16_processSample(leftFloat, rightFloat, true);   // Left channel
-      rightFloat = EQ16_processSample(rightFloat, leftFloat, false); // Right channel
-      
-      // Apply maximum attenuation to eliminate all overload (+2dB more)
-      const float EQ16_ATTENUATION = 0.04f;  // 1/25 = 0.04 (about -28dB total)
-      leftFloat *= EQ16_ATTENUATION;
-      rightFloat *= EQ16_ATTENUATION;
-      
-      // Prevent clipping (should be rare now with attenuation)
-      if (leftFloat > 1.0f) leftFloat = 1.0f;
-      if (leftFloat < -1.0f) leftFloat = -1.0f;
-      if (rightFloat > 1.0f) rightFloat = 1.0f;
-      if (rightFloat < -1.0f) rightFloat = -1.0f;
-      
-      // Convert back to int16
-      outBuff[i * 2] = (int16_t)(leftFloat * 32767.0f);      // L channel  
-      outBuff[i * 2 + 1] = (int16_t)(rightFloat * 32767.0f); // R channel
-    }
-    // Debug log every 10000 samples (~every 5 seconds at 48kHz)
-    static int debugCounter = 0;
-    debugCounter += validSamples;
-    if (debugCounter > 10000) {
-      Serial.println("DEBUG: EQ16 audio processing active");
-      debugCounter = 0;
-    }
-  }
-  
-  // Continue normal audio processing
-  *continueI2S = true;
-}
-
 void my_audio_info(Audio::msg_t m)
 {
   switch(m.e)
@@ -3560,7 +3947,7 @@ void my_audio_info(Audio::msg_t m)
         Serial.printf("bitrate FLAC: .... %s\n", m.msg); // icy-bitrate or bitrate from metadata
         int endIndex = msg.indexOf('\n', bitrateIndexFlac);
         if (endIndex == -1) endIndex = msg.length();
-        bitrateString = msg.substring(bitrateIndexFlac + 19, endIndex); // POPRAWKA: bitrateIndexFlac zamiast bitrateIndex
+        bitrateString = msg.substring(bitrateIndexFlac + 19, endIndex);  // POPRAWKA: bitrateIndexFlac zamiast bitrateIndex
         bitrateString.trim();
 
         // przliczenie bps na Kbps
@@ -3690,10 +4077,19 @@ void my_audio_info(Audio::msg_t m)
     {
       Serial.printf("end of file:  %s\n", m.msg);
       
-      // Sprawdź czy SDPlayer odtwarza muzykę - jeśli tak, ustaw flagę auto-play
-      if (sdPlayerPlayingMusic && g_sdPlayerWeb) {
-        Serial.println("[SDPlayer] Koniec utworu - żądanie automatycznego przejścia do następnego");
-        sdPlayerAutoPlayNext = true; // Ustaw flagę - obsługa w głównej pętli loop()
+      // Wyczyść metadane ID3 przed kolejnym utworem
+      currentMP3Artist = "";
+      currentMP3Title = "";
+      currentMP3Album = "";
+      
+      // KRYTYCZNE: Najpierw sprawdź czy SDPlayer jest w trybie odtwarzania muzyki
+      if (sdPlayerPlayingMusic) {
+        // KRYTYCZNE FIX: NIE wywołuj audio.connecttoFS() bezpośrednio w callbacku evt_eof!
+        // To powoduje watchdog timeout bo callback działa w wątku audio.
+        // Zamiast tego ustaw TYLKO flagę - obsługa w loop()
+        
+        Serial.println("[SDPlayer] Koniec utworu - żądanie auto-play w loop()");
+        sdPlayerAutoPlayNext = true; // Ustaw flagę dla obu trybów (pilot i WebUI)
       }
       else if (resumePlay == true)
       {
@@ -3721,7 +4117,42 @@ void my_audio_info(Audio::msg_t m)
       Serial.printf("info: ....... evt_bitrate: %s\n", m.msg); break; // icy-bitrate or bitrate from metadata
     }
     case Audio::evt_icyurl:         Serial.printf("icy URL: .... %s\n", m.msg); break;
-    case Audio::evt_id3data:        Serial.printf("ID3 data: ... %s\n", m.msg); break;
+    case Audio::evt_id3data:
+    {
+      String id3Data = String(m.msg);
+      id3Data.trim();
+      Serial.printf("ID3 data: ... %s\n", m.msg);
+      
+      // Parsuj dane ID3 - format może być: "Artist: xxx", "Title: xxx", "Album: xxx" lub "TPE1=xxx", "TIT2=xxx", "TALB=xxx"
+      if (id3Data.startsWith("Artist: ") || id3Data.startsWith("TPE1=")) {
+        int startPos = id3Data.indexOf(": ");
+        if (startPos < 0) startPos = id3Data.indexOf("=");
+        if (startPos >= 0) {
+          currentMP3Artist = id3Data.substring(startPos + 1);
+          currentMP3Artist.trim();
+          Serial.printf("[ID3] Artist: %s\n", currentMP3Artist.c_str());
+        }
+      }
+      else if (id3Data.startsWith("Title: ") || id3Data.startsWith("TIT2=")) {
+        int startPos = id3Data.indexOf(": ");
+        if (startPos < 0) startPos = id3Data.indexOf("=");
+        if (startPos >= 0) {
+          currentMP3Title = id3Data.substring(startPos + 1);
+          currentMP3Title.trim();
+          Serial.printf("[ID3] Title: %s\n", currentMP3Title.c_str());
+        }
+      }
+      else if (id3Data.startsWith("Album: ") || id3Data.startsWith("TALB=")) {
+        int startPos = id3Data.indexOf(": ");
+        if (startPos < 0) startPos = id3Data.indexOf("=");
+        if (startPos >= 0) {
+          currentMP3Album = id3Data.substring(startPos + 1);
+          currentMP3Album.trim();
+          Serial.printf("[ID3] Album: %s\n", currentMP3Album.c_str());
+        }
+      }
+    }
+    break;
     case Audio::evt_lasthost:       Serial.printf("last URL: ... %s\n", m.msg); break;
     case Audio::evt_name:           
 	  {
@@ -3765,7 +4196,6 @@ void my_audio_info(Audio::msg_t m)
     case Audio::evt_icydescription: Serial.printf("icy descr: .. %s\n", m.msg); break;
     case Audio::evt_image: for(int i = 0; i < m.vec.size(); i += 2) { Serial.printf("cover image:  segment %02i, pos %07lu, len %05lu\n", i / 2, m.vec[i], m.vec[i + 1]);} break; // APIC
     case Audio::evt_lyrics:         Serial.printf("sync lyrics:  %s\n", m.msg); break;
-
     default:                        Serial.printf("message:..... %s\n", m.msg); break;
   }
 }
@@ -3789,9 +4219,6 @@ void encoderFunctionOrderChange()
 
 void bankMenuDisplay()
 {
-  // GUARD: Nie rysuj gdy SDPlayer aktywny
-  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
-  
   if (bank_nr < 1) {bank_nr = 1;}
   const uint8_t cornerRadius = 3;
   float segmentWidth = (float)212 / bank_nr_max;
@@ -3809,13 +4236,15 @@ void bankMenuDisplay()
   u8g2.setFont(u8g2_font_fub14_tf);
   u8g2.drawStr(80, 33, "BANK ");
   u8g2.drawStr(145, 33, String(bank_nr).c_str());  // numer banku
-  if ((bankNetworkUpdate == true) || (noSDcard == true))
+  //if ((bankNetworkUpdate == true) || (noSDcard == true))
+  if ((bankNetworkUpdate == true) || (storageTextName == "EEPROM"))
   {
     u8g2.setFont(spleen6x12PL);
     u8g2.drawStr(185, 24, "NETWORK ");
     u8g2.drawStr(188, 34, "UPDATE  ");
     
-    if (noSDcard == true)
+    //if (noSDcard == true)
+    if (storageTextName == "EEPROM")
     {
       //u8g2.drawStr(24, 24, "NO SD");
       u8g2.drawStr(24, 34, "NO CARD");
@@ -3837,6 +4266,9 @@ void bankMenuDisplay()
 // =========== Funkcja do obsługi przycisków enkoderów, debouncing i długiego naciśnięcia ==============//
 void handleButtons() 
 {
+  // Blokuj obsługę przycisków radia gdy SD Player jest aktywny
+  if (sdPlayerOLEDActive) return;
+  
   static unsigned long buttonPressTime2 = 0;  // Zmienna do przechowywania czasu naciśnięcia przycisku enkodera 2
   static bool isButton2Pressed = false;       // Flaga do śledzenia, czy przycisk enkodera 2 jest wciśnięty
   static bool action2Taken = false;           // Flaga do śledzenia, czy akcja dla enkodera 2 została wykonana
@@ -3874,10 +4306,11 @@ void handleButtons()
 
       // Jeśli przycisk jest wciśnięty przez co najmniej 3 sekundy i akcja jeszcze nie była wykonana
       if (millis() - buttonPressTime2 >= buttonLongPressTime2 && !action2Taken && millis() - buttonPressTime2 < buttonSuperLongPressTime2) {
-        // Zawsze otwieramy elegancki 3-punktowy equalizer jako domyślny
-        Serial.println("debug--Opening 3-Point Equalizer Menu");
-        displayEqualizer(); // Wywołujemy oryginalną elegancką funkcję menu equalizera
-        action2Taken = true; // Oznaczamy, że akcja została wykonana
+        Serial.println("debug--Bank Menu");
+        bankMenuDisplay();
+        
+        // Ustawiamy flagę akcji, aby wykonała się tylko raz
+        action2Taken = true;
       }
     }
   } 
@@ -3978,7 +4411,8 @@ void scrollDown()
 }
 
 // Funkcja do przewijania w górę
-void scrollUp() {
+void scrollUp() 
+{
   if (currentSelection > 0) 
   {
     currentSelection--;
@@ -4167,6 +4601,62 @@ void drawSignalPower(uint8_t xpwr, uint8_t ypwr, bool print, bool mode)
 
 void rcInputKey(uint8_t i)
 {
+  // PRIORYTET: SDPlayer track selection (gdy OLED aktywny)
+  if (sdPlayerOLEDActive) {
+    Serial.printf("[IR] Numeric key %d pressed - SDPlayer active, tracksCount=%d\n", i, tracksCount);
+    
+    // ===== SYSTEM WIELOCYFROWEGO WPROWADZANIA (0-100) =====
+    // Obsługa cyfry 0 jako dodanie do bufora (np. "1"+"0"=10)
+    
+    if (i == 0) {
+      // Cyfra 0 - dodaj do bufora jeśli jest aktywne wprowadzanie
+      if (irInputActive && irInputBuffer > 0 && irInputBuffer < 10) {
+        // Dodaj 0 jako drugą cyfrę (1→10, 2→20, etc.)
+        int newNumber = irInputBuffer * 10;
+        if (newNumber <= 100) {
+          irInputBuffer = newNumber;
+          irInputTimeout = millis() + IR_INPUT_TIMEOUT_MS;
+          Serial.printf("[SDPlayer IR] Added 0, buffer now: %d\n", irInputBuffer);
+        }
+      }
+      // Uwaga: Pojedyncze "0" i "00" dla wyjścia obsługiwane są w głównym bloku IR
+      return;
+    }
+    
+    if (i >= 1 && i <= 9) {
+      // Klawisz 1-9: buduj liczbę wielocyfrową
+      if (!irInputActive) {
+        // Rozpocznij nowe wprowadzanie
+        irInputBuffer = i;
+        irInputActive = true;
+        irInputTimeout = millis() + IR_INPUT_TIMEOUT_MS;
+        Serial.printf("[SDPlayer IR] Multi-digit input started: %d\n", irInputBuffer);
+        
+        // Jeśli liczba jednocyfrowa i w zakresie - automatyczne potwierdzenie po krótkim czasie
+        if (i <= tracksCount) {
+          // Daj 1 sekundę na ewentualne dodanie kolejnej cyfry
+          irInputTimeout = millis() + 1000;
+        }
+      } else if (irInputBuffer < 10) {
+        // Dodaj drugą cyfrę (max 99)
+        int newNumber = irInputBuffer * 10 + i;
+        if (newNumber <= 100) {
+          irInputBuffer = newNumber;
+          irInputTimeout = millis() + IR_INPUT_TIMEOUT_MS;
+          Serial.printf("[SDPlayer IR] Multi-digit input updated: %d\n", irInputBuffer);
+        } else {
+          Serial.printf("[SDPlayer IR] Number too large: %d, ignoring digit %d\n", newNumber, i);
+        }
+      } else {
+        Serial.printf("[SDPlayer IR] Buffer full (%d), ignoring digit %d\n", irInputBuffer, i);
+      }
+      return;
+    }
+    
+    return; // Wyjście - nie przetwarzaj jako zmiana stacji radiowej
+  }
+
+  // Original radio station selection logic
   rcInputDigitsMenuEnable = true;
   if (bankMenuEnable == true)
   {
@@ -4376,12 +4866,6 @@ void volumeFadeOut(uint8_t time_ms)
 
 void changeStation() 
 {
-  // ZABEZPIECZENIE: NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
-  if (sdPlayerOLEDActive) {
-    Serial.println("DEBUG: changeStation() BLOCKED - SD Player is active!");
-    return;
-  }
-  
   fwupd = false;
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_fub14_tf); // cziocnka 14x11
@@ -4390,11 +4874,11 @@ void changeStation()
   u8g2.sendBuffer();
 
   mp3 = flac = aac = vorbis = opus = false;
-  streamCodec = "";
+  streamCodec = "-";
   //stationLogoUrl = "";
   
-  if (urlPlaying) { bank_nr = previous_bank_nr;} // Przywracamy ostatni numer banku po graniu z ULR gdzie ustawilismy bank na 0
-
+  if (urlPlaying) {bank_nr = previous_bank_nr;}  // Przywracamy ostatni numer banku po graniu z ULR gdzie ustawilismy bank na 0
+    
   // Usunięcie wszystkich znaków z obiektów 
   stationString.remove(0);  
   stationNameStream.remove(0);
@@ -4409,7 +4893,7 @@ void changeStation()
 
   sampleRateString = "--.-";
   bitsPerSampleString = "--";
-  bitrateString = "-?-";
+  bitrateString = "---";
 
   Serial.println("debug changeStation -> Read station from PSRAM");
   String stationUrl = "";
@@ -4487,11 +4971,15 @@ void changeStation()
     if (f_volumeFadeOn && !volumeMute) {startFadeIn(volumeValue);} else if (!volumeMute) {audio.setVolume(volumeValue);}   
     
     // Zapisujemy jaki numer stacji i który bank gramy tylko jesli sie zmieniły
-    if ((station_nr != stationFromBuffer || bank_nr != previous_bank_nr) && f_saveVolumeStationAlways) {saveStationOnSD();} 
+    //if ((station_nr != stationFromBuffer || bank_nr != previous_bank_nr) && f_saveVolumeStationAlways) {saveStationOnSD();}
+    
     
     if (station_nr != 0 ) {stationFromBuffer = station_nr;} 
-    urlPlaying = false; // Kasujemy flage odtwarzania z adresu przesłanego ze strony WWW
+    if (f_saveVolumeStationAlways) {saveStationOnSD();} 
     //saveStationOnSD(); // Zapisujemy jaki numer stacji i który bank gramy
+
+    urlPlaying = false; // Kasujemy flage odtwarzania z adresu przesłanego ze strony WWW
+        
   } 
   else 
   {
@@ -4504,16 +4992,15 @@ void changeStation()
   {
    firstVisibleLine = currentSelection - 3;
   }
-  wsStationChange(station_nr);
   ActionNeedUpdateTime = true;
+   
+  wsStationChange(station_nr, bank_nr); // Od teraz Event Audio odpowiada za info o stacji
+  wsAudioRefresh = true;
 }
 
 // Funkcja do wyświetlania listy stacji radiowych z opcją wyboru poprzez zaznaczanie w negatywie
 void displayStations() 
 {
-  // GUARD: Nie rysuj gdy SDPlayer aktywny
-  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
-  
   listedStations = true;
   u8g2.clearBuffer();  // Wyczyść bufor przed rysowaniem, aby przygotować ekran do nowej zawartości
   u8g2.setFont(spleen6x12PL);
@@ -4567,6 +5054,247 @@ void displayStations()
   // Przywróć domyślne ustawienia koloru rysowania (biały tekst na czarnym tle)
   u8g2.setDrawColor(1);  // Biały kolor rysowania
   u8g2.sendBuffer();     // Wyślij zawartość bufora do ekranu OLED, aby wyświetlić zmiany
+  Serial.print("CurrentSelection = "); Serial.println(currentSelection);
+  Serial.print("firstVisibleLine = "); Serial.println(firstVisibleLine);
+}
+
+// Funkcja do wyświetlania listy utworów z karty SD z opcją wyboru poprzez zaznaczanie w negatywie
+void displayTracks() 
+{
+  listedTracks = true;
+  u8g2.clearBuffer();  // Wyczyść bufor przed rysowaniem, aby przygotować ekran do nowej zawartości
+  u8g2.setFont(u8g2_font_6x12_t_cyrillic);  // Czcionka z obsługą rozszerzonych znaków (polskie)
+  u8g2.setCursor(20, 10);                                          // Ustaw pozycję kursora dla nagłówka
+  u8g2.print("SD PLAYER - TRACKS: ");                              // Wyświetl nagłówek
+  u8g2.print(String(currentTrackSelection + 1) + " / " + String(tracksCount));  // Numer aktualnego utworu i licznik wszystkich utworów
+  if (sdPlayerSessionCompleted && sdPlayerSessionStartIndex >= 0 && sdPlayerSessionEndIndex >= 0) {
+    u8g2.setCursor(140, 10);
+    u8g2.print("DONE ");
+    u8g2.print(sdPlayerSessionStartIndex + 1);
+    u8g2.print("->");
+    u8g2.print(sdPlayerSessionEndIndex + 1);
+  }
+  u8g2.drawLine(0,11,256,11);
+
+  int displayRow = 1;  // Zmienna dla numeru wiersza, zaczynając od drugiego (pierwszy to nagłówek)
+
+  // Wyświetlanie utworów, zaczynając od drugiej linii
+  for (int i = firstVisibleTrack; i < min(firstVisibleTrack + maxVisibleTracks, tracksCount); i++) 
+  {
+    String trackName = trackFiles[i];  // Pobierz ścieżkę pliku z tablicy (np. "MUZYKA/song.mp3")
+    
+    // Usuń ścieżkę - zostaw tylko nazwę pliku
+    int lastSlash = trackName.lastIndexOf('/');
+    if (lastSlash >= 0) {
+      trackName = trackName.substring(lastSlash + 1);
+    }
+    
+    // Usuń rozszerzenie z nazwy pliku dla czytelności
+    int dotIndex = trackName.lastIndexOf('.');
+    if (dotIndex > 0) {
+      trackName = trackName.substring(0, dotIndex);
+    }
+    
+    // Dodaj numer utworu przed nazwą (numeracja od 1)
+    String trackWithNumber = String(i + 1) + ". " + trackName;
+    
+    // Ogranicz długość nazwy do szerokości ekranu (około 38 znaków dla czcionki 6px - mniej bo dodaliśmy numer)
+    if (trackWithNumber.length() > 38) {
+      trackWithNumber = trackWithNumber.substring(0, 35) + "...";
+    }
+
+    // Sprawdź, czy bieżący utwór to ten, który jest aktualnie zaznaczony
+    if (i == currentTrackSelection) 
+    {
+      u8g2.setDrawColor(1);                           // Ustaw biały kolor rysowania
+      u8g2.drawBox(0, displayRow * 13, 256, 13);     // Narysuj prostokąt jako tło dla zaznaczonego utworu
+      u8g2.setDrawColor(0);                           // Zmień kolor rysowania na czarny dla tekstu zaznaczonego utworu
+    } else {
+      u8g2.setDrawColor(1);  // Dla niezaznaczonych utworów ustaw zwykły biały kolor tekstu
+    }
+    
+    // KRYTYCZNE: Ustaw czcionkę przed każdym rysowaniem tekstu (polskie znaki)
+    u8g2.setFont(u8g2_font_6x12_t_cyrillic);  // Czcionka z obsługą rozszerzonych znaków
+    
+    // Wyświetl nazwę utworu z numerem
+    u8g2.drawStr(0, displayRow * 13 + 10, trackWithNumber.c_str());
+
+    // Przejdź do następnej linii (następny wiersz na ekranie)
+    displayRow++;
+  }
+  
+  // Przywróć domyślne ustawienia koloru rysowania (biały tekst na czarnym tle)
+  u8g2.setDrawColor(1);  // Biały kolor rysowania
+  u8g2.sendBuffer();     // Wyślij zawartość bufora do ekranu OLED, aby wyświetlić zmiany
+  Serial.print("CurrentTrackSelection = "); Serial.println(currentTrackSelection);
+  Serial.print("firstVisibleTrack = "); Serial.println(firstVisibleTrack);
+}
+
+// Funkcja pomocnicza do sprawdzania czy plik jest muzyczny
+bool isAudioFile(const String& fileName) {
+  return fileName.endsWith(".mp3") || fileName.endsWith(".MP3") ||
+         fileName.endsWith(".flac") || fileName.endsWith(".FLAC") ||
+         fileName.endsWith(".aac") || fileName.endsWith(".AAC") ||
+         fileName.endsWith(".wav") || fileName.endsWith(".WAV") ||
+         fileName.endsWith(".m4a") || fileName.endsWith(".M4A");
+}
+
+// Funkcja rekurencyjna do skanowania katalogów
+void scanDirectory(const String& path, int& fileCount) {
+  File dir = STORAGE.open(path);
+  if (!dir || !dir.isDirectory()) {
+    if (dir) dir.close();
+    return;
+  }
+  
+  File entry = dir.openNextFile();
+  while (entry && tracksCount < 100) {  // Limit 100 plików
+    String entryName = String(entry.name());
+    
+    // Buduj pełną ścieżkę: path + "/" + entryName (ale unikaj podwójnych "/")
+    String fullPath;
+    if (path.endsWith("/")) {
+      fullPath = path + entryName;
+    } else {
+      fullPath = path + "/" + entryName;
+    }
+    
+    // Utwórz ścieżkę względną (bez początkowego "/")
+    String relativePath = fullPath;
+    if (relativePath.startsWith("/")) {
+      relativePath = relativePath.substring(1);
+    }
+    
+    if (entry.isDirectory()) {
+      // Pomiń systemowe foldery Windows/Mac
+      if (entryName != "System Volume Information" && 
+          entryName != "$RECYCLE.BIN" && 
+          entryName != ".Spotlight-V100" &&
+          entryName != ".Trashes" &&
+          entryName != ".fseventsd") {
+        Serial.printf("[SDPlayer] Skanowanie podfolderu: %s\n", relativePath.c_str());
+        scanDirectory(fullPath, fileCount);  // Rekurencja z pełną ścieżką
+      }
+    } else {
+      // Sprawdź czy to plik muzyczny
+      if (isAudioFile(entryName)) {
+        trackFiles[tracksCount] = relativePath;
+        tracksCount++;
+        Serial.printf("[SDPlayer] Znaleziono: %s\n", relativePath.c_str());
+      }
+    }
+    
+    // KRYTYCZNE: Oddaj kontrolę co 10 plików aby uniknąć watchdog timeout
+    fileCount++;
+    if (fileCount % 10 == 0) {
+      yield();
+      delay(1);
+    }
+    
+    entry.close();
+    entry = dir.openNextFile();
+  }
+  
+  dir.close();
+}
+
+// Funkcja do ładowania listy utworów muzycznych z karty SD (wszystkie foldery)
+void loadTracksFromSD() 
+{
+  tracksCount = 0;  // Resetuj licznik utworów
+  
+  Serial.println("[SDPlayer] Skanowanie plików muzycznych na karcie SD...");
+  
+  // Skanuj katalog główny i wszystkie podfoldery
+  int fileCount = 0;
+  scanDirectory("/", fileCount);
+  
+  Serial.print("[SDPlayer] Łącznie znaleziono utworów: ");
+  Serial.println(tracksCount);
+
+  // KRYTYCZNE: Synchronizuj listę plików z SDPlayerOLED dla numeracji utworów
+  if (g_sdPlayerOLED && tracksCount > 0) {
+    g_sdPlayerOLED->syncTrackListFromIR(trackFiles, tracksCount);
+  }
+
+  if (lastPlayedTrackIndex < 0 && sdPlayerSessionEndIndex >= 0 && sdPlayerSessionEndIndex < tracksCount) {
+    lastPlayedTrackIndex = sdPlayerSessionEndIndex;
+  }
+}
+
+void saveSDPlayerSessionState()
+{
+#ifdef AUTOSTORAGE
+  if (_storage == nullptr) {
+    return;
+  }
+#endif
+
+  File stateFile = STORAGE.open(sdPlayerSessionStateFile, FILE_WRITE);
+  if (!stateFile) {
+    Serial.println("[SDPlayer] BLAD zapisu stanu sesji");
+    return;
+  }
+
+  stateFile.print("start=");
+  stateFile.println(sdPlayerSessionStartIndex);
+  stateFile.print("end=");
+  stateFile.println(sdPlayerSessionEndIndex);
+  stateFile.print("completed=");
+  stateFile.println(sdPlayerSessionCompleted ? 1 : 0);
+  stateFile.close();
+}
+
+void loadSDPlayerSessionState()
+{
+  sdPlayerSessionStartIndex = -1;
+  sdPlayerSessionEndIndex = -1;
+  sdPlayerSessionCompleted = false;
+
+#ifdef AUTOSTORAGE
+  if (_storage == nullptr) {
+    return;
+  }
+#endif
+
+  if (!STORAGE.exists(sdPlayerSessionStateFile)) {
+    return;
+  }
+
+  File stateFile = STORAGE.open(sdPlayerSessionStateFile, FILE_READ);
+  if (!stateFile) {
+    Serial.println("[SDPlayer] BLAD odczytu stanu sesji");
+    return;
+  }
+
+  while (stateFile.available()) {
+    String line = stateFile.readStringUntil('\n');
+    line.trim();
+
+    if (line.startsWith("start=")) {
+      sdPlayerSessionStartIndex = line.substring(6).toInt();
+    } else if (line.startsWith("end=")) {
+      sdPlayerSessionEndIndex = line.substring(4).toInt();
+    } else if (line.startsWith("completed=")) {
+      sdPlayerSessionCompleted = (line.substring(10).toInt() != 0);
+    }
+  }
+  stateFile.close();
+
+  if (sdPlayerSessionEndIndex >= 0) {
+    lastPlayedTrackIndex = sdPlayerSessionEndIndex;
+  }
+
+  Serial.printf("[SDPlayer] Odczyt stanu sesji: start=%d end=%d completed=%d\n",
+                sdPlayerSessionStartIndex,
+                sdPlayerSessionEndIndex,
+                sdPlayerSessionCompleted ? 1 : 0);
+}
+
+void clearSDPlayerSessionCompleted()
+{
+  sdPlayerSessionCompleted = false;
+  saveSDPlayerSessionState();
 }
 
 void updateTimerFlag() 
@@ -4674,7 +5402,7 @@ void updateTime()
         snprintf(timeString, sizeof(timeString), ":%02d", timeinfo.tm_sec);
         u8g2.drawStr(xtime+163, 45, timeString);
       }
-      else if (displayMode == 3)// || displayMode == 5)
+      else if (displayMode == 3)// || displayMode == 8)
       { 
         if (showDots) snprintf(timeString, sizeof(timeString), "%2d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
         else snprintf(timeString, sizeof(timeString), "%2d %02d", timeinfo.tm_hour, timeinfo.tm_min);
@@ -4682,6 +5410,14 @@ void updateTime()
         //u8g2.drawStr(113, 11, timeString);
         u8g2.drawStr(226, 10, timeString);
       }
+      else if (displayMode == 8)
+      { 
+        if (showDots) snprintf(timeString, sizeof(timeString), "%2d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
+        else snprintf(timeString, sizeof(timeString), "%2d %02d", timeinfo.tm_hour, timeinfo.tm_min);
+        u8g2.setFont(spleen6x12PL);
+        u8g2.drawStr(50, 8, timeString);
+      }
+    
     }
     else if ((timeDisplay == true) && (audio.isRunning() == false))
     {
@@ -4715,7 +5451,7 @@ void updateTime()
       }       
       if ((displayMode == 0) || (displayMode == 1) || (displayMode == 2)) { u8g2.drawStr(226, 63, timeString);}
       if (displayMode == 3) { u8g2.drawStr(226, 10, timeString);}
-      //if (displayMode == 5) { u8g2.drawStr(226, 10, timeString);}
+      //if (displayMode == 8) { u8g2.drawStr(226, 10, timeString);}
     }
   }
 }
@@ -4779,10 +5515,6 @@ void saveEqualizerOnSD()
       Serial.println("debug SD -> Błąd podczas tworzenia pliku equalizer.txt.");
     }
   }
-  
-  // Pokazujemy komunikat przez sekundę, potem wracamy do głównego ekranu
-  delay(1000);
-  displayRadio();
 }
 
 void readEqualizerFromSD() 
@@ -4895,7 +5627,7 @@ void readStationFromSD()
   }
 }
 
-
+/*
 void vuMeterMode0new() 
 {
     // Odczyt VU
@@ -4995,13 +5727,14 @@ void vuMeterMode0new()
         }
     }
 }
-
+*/
 
 void vuMeterMode0() 
 {
+  // FIX: Clamping do 0-127 (bugfix z ESP32-audioI2S 3.4.4x commit #8)
   uint16_t raw = audio.getVUlevel();
-  vuMeterL = (raw >> 8) & 0xFF;
-  vuMeterR = raw & 0xFF;
+  vuMeterL = min((raw >> 8) & 0x7F, 127);  // Clamp left channel 0-127
+  vuMeterR = min(raw & 0x7F, 127);         // Clamp right channel 0-127
 
   //vuMeterL = constrain(vuMeterL, 0, 243);
   //vuMeterR = constrain(vuMeterR, 0, 243);
@@ -5249,12 +5982,13 @@ void vuMeterMode0()
 
 void vuMeterMode3() 
 {
-  // Pobranie poziomu VU
-  vuMeterR = min(audio.getVUlevel() & 0xFF, 255);
-  vuMeterL = min(audio.getVUlevel() >> 8, 255);
+  // FIX: Clamping do 0-127 (bugfix z ESP32-audioI2S 3.4.4x commit #8)
+  uint16_t raw = audio.getVUlevel();
+  vuMeterR = min(raw & 0x7F, 127);         // Clamp right 0-127
+  vuMeterL = min((raw >> 8) & 0x7F, 127);  // Clamp left 0-127
 
-  vuMeterR = map(vuMeterR, 0, 255, 0, 128);
-  vuMeterL = map(vuMeterL, 0, 255, 0, 128);
+  vuMeterR = map(vuMeterR, 0, 255, 0, 127);
+  vuMeterL = map(vuMeterL, 0, 255, 0, 127);
 
   // Wygładzanie
   if (vuSmooth)
@@ -5349,9 +6083,10 @@ void vuMeterMode3()
 
 void vuMeterMode4() // Mode4 eksperymetn z duzymi wskaznikami VU
 {
-  // Pobranie poziomów VU (0–255)
-  uint8_t rawL = audio.getVUlevel() >> 8;
-  uint8_t rawR = audio.getVUlevel() & 0xFF;
+  // FIX: Clamping do 0-127 (bugfix z ESP32-audioI2S 3.4.4x commit #8)
+  uint16_t raw = audio.getVUlevel();
+  uint8_t rawL = min((raw >> 8) & 0x7F, 127);  // Clamp left 0-127
+  uint8_t rawR = min(raw & 0x7F, 127);         // Clamp right 0-127
 
   // Skalowanie do 0–100
   int vuL = map(rawL, 0, 255, 0, 100);
@@ -5475,6 +6210,9 @@ void showIP(uint16_t xip, uint16_t yip)
 
 void displayClearUnderScroller() // Funkcja odpwoiedzialna za przewijanie informacji strem tittle lub stringstation
 {
+  // KRYTYCZNE: Blokuj gdy SDPlayer aktywny
+  if (sdPlayerOLEDActive) return;
+  
   if (displayMode == 0) // Tryb normalny Mode 0- radio
   {
     u8g2.setDrawColor(1);
@@ -5493,26 +6231,26 @@ void displayClearUnderScroller() // Funkcja odpwoiedzialna za przewijanie inform
     u8g2.drawStr(0,yPositionDisplayScrollerMode2 + 12, "                                           "); //43 znaki czyszczenie ekranu
     u8g2.drawStr(0,yPositionDisplayScrollerMode2 + 12 + 12, "                                           "); //43 znaki czyszczenie ekranu
   }
-  else if (displayMode == 3)  // Tryb mały tekst - Mode 3 || displayMode == 5
+  else if (displayMode == 3)  // Tryb mały tekst - Mode 3 || displayMode == 8
   {
     u8g2.setDrawColor(1);
     u8g2.setFont(spleen6x12PL);
     u8g2.drawStr(0,yPositionDisplayScrollerMode3, "                                           "); //43 spacje - czyszczenie ekranu   
   }
-  /*  else if (displayMode == 5)  // Tryb mały tekst - Mode 3 || displayMode == 5
+  else if (displayMode == 8)  // Tryb mały tekst - Mode 3 || displayMode == 8
   {
     u8g2.setDrawColor(1);
     u8g2.setFont(spleen6x12PL);
-    u8g2.drawStr(0,yPositionDisplayScrollerMode5, "                                           "); //43 spacje - czyszczenie ekranu   
+    u8g2.drawStr(0,yPositionDisplayScrollerMode8, "                        "); //43 spacje - czyszczenie ekranu   
   }
-  */
+  
   u8g2.sendBuffer();  // rysujemy całą zawartosc ekranu.  
 }
 
 void displayRadioScroller() // Funkcja odpwoiedzialna za przewijanie informacji strem tittle lub stringstation
 {
-  // GUARD: Nie rysuj gdy SDPlayer aktywny
-  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
+  // KRYTYCZNE: Blokuj gdy SDPlayer aktywny
+  if (sdPlayerOLEDActive) return;
   
   // Jesli zmieniła sie dlugosc wyswietlanego stationString to wyczysc ekran OLED w miescach Scrollera
   if (stationStringScroll.length() != stationStringScrollLength) 
@@ -5630,7 +6368,7 @@ void displayRadioScroller() // Funkcja odpwoiedzialna za przewijanie informacji 
       u8g2.drawStr(0, yPosition, currentLine.c_str());
     }
   }
-  else if (displayMode == 3)//|| displayMode == 5
+  else if (displayMode == 3)//|| displayMode == 8
   {
    if (stationStringScroll.length() > maxStationVisibleStringScrollLength) //42 + 4 znaki spacji separatora. Realnie widzimy 42 znaki
     {    
@@ -5656,18 +6394,22 @@ void displayRadioScroller() // Funkcja odpwoiedzialna za przewijanie informacji 
       u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode3, stationStringScroll.c_str()); 
     } 
   }
+  
+  // WYŁĄCZONE dla displayMode 8, 6-10: vuMeterMode8/6/10 rysują własną nazwę stacji u góry
+  // Scrolling title tu nadpisywałby ich ekran - nie jest potrzebny
   /*
-  else if (displayMode == 5)//|| displayMode == 5
+  else if (displayMode == 8)//|| displayMode == 8
   {
-   if (stationStringScroll.length() > maxStationVisibleStringScrollLength) //42 + 4 znaki spacji separatora. Realnie widzimy 42 znaki
+   //if (stationStringScroll.length() > maxStationVisibleStringScrollLength) //42 + 4 znaki spacji separatora. Realnie widzimy 42 znaki
+   if (stationStringScroll.length() > 24) //42 + 4 znaki spacji separatora. Realnie widzimy 42 znaki
     {    
       xPositionStationString = offset;
       u8g2.setFont(spleen6x12PL);
       u8g2.setDrawColor(1);
       do {
-        u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode5, stationStringScroll.c_str());
+        u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode8, stationStringScroll.c_str());
         xPositionStationString = xPositionStationString + stationStringScrollWidth;
-      } while (xPositionStationString < 256);
+      } while (xPositionStationString < 128);
       
       offset = offset - 1;
       if (offset < (65535 - stationStringScrollWidth)) { 
@@ -5676,25 +6418,59 @@ void displayRadioScroller() // Funkcja odpwoiedzialna za przewijanie informacji 
     } else {
       xPositionStationString = 0;
       //xPositionStationString = u8g2.getStrWidth(stationStringScroll.c_str());
-      xPositionStationString = (SCREEN_WIDTH - stationStringScrollWidth) / 2;
+      //xPositionStationString = (SCREEN_WIDTH - stationStringScrollWidth) / 2;
+      
+      xPositionStationString = (128 - stationStringScrollWidth) / 2;
            
       u8g2.setDrawColor(1);
       u8g2.setFont(spleen6x12PL);    
-      u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode5, stationStringScroll.c_str()); 
+      u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode8, stationStringScroll.c_str()); 
+    } 
+  }
+  // Style 6-10: Analizatory spectrum - scrolling tekstu stacji
+  else if (displayMode >= 6 && displayMode <= 10)
+  {
+   if (stationStringScroll.length() > 24)
+    {    
+      xPositionStationString = offset;
+      u8g2.setFont(spleen6x12PL);
+      u8g2.setDrawColor(1);
+      do {
+        u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode8, stationStringScroll.c_str());
+        xPositionStationString = xPositionStationString + stationStringScrollWidth;
+      } while (xPositionStationString < 128);
+      
+      offset = offset - 1;
+      if (offset < (65535 - stationStringScrollWidth)) { 
+        offset = 0;
+      }
+    } else {
+      xPositionStationString = (128 - stationStringScrollWidth) / 2;
+      u8g2.setDrawColor(1);
+      u8g2.setFont(spleen6x12PL);    
+      u8g2.drawStr(xPositionStationString, yPositionDisplayScrollerMode8, stationStringScroll.c_str()); 
     } 
   }
   */
+  
 }
 
 void handleKeyboard()
 {
   uint8_t key = 17;
+  keyboardValue = 0;
+
+  // --- Dummy read (dla stabilnosci ESP32 ADC)
+  analogRead(keyboardPin);
+  delayMicroseconds(5);
+
   for (int i = 0; i < 32; i++)
   {
     keyboardValue = keyboardValue + analogRead(keyboardPin);
   }
-  keyboardValue = keyboardValue / 32;  
-  
+  //keyboardValue = keyboardValue / 32;  
+  keyboardValue >>= 5;
+
 
   if (debugKeyboard == 1) 
   { 
@@ -5842,7 +6618,9 @@ void volumeDisplay()
   if (maxVolume == 42 && volumeValue > 0) { u8g2.drawRBox(23, 44, volumeValue * 5, 10, 2);}  // Progress bar głosnosci
   if (maxVolume == 21 && volumeValue > 0) { u8g2.drawRBox(23, 44, volumeValue * 10, 10, 2);} // Progress bar głosnosci
   u8g2.sendBuffer();
-  wsVolumeChange(volumeValue); // Wyślij aktualizację przez WebSocket na strone WWW
+  
+  //wsVolumeChange(volumeValue); // Wyślij aktualizację przez WebSocket na strone WWW
+  wsVolumeChange(); // Wyślij aktualizację przez WebSocket na strone WWW
   }
 
 
@@ -5885,25 +6663,15 @@ void clearFlags()
   debugKeyboard = false;
   displayActive = false;
   listedStations = false;
+  listedTracks = false;  // Wyłącz listę utworów SDPlayer
   volumeSet = false;
   bankMenuEnable = false;
   bankNetworkUpdate = false;
   equalizerMenuEnable = false;
   rcInputDigitsMenuEnable = false;
   f_voiceTimeBlocked = false;
-  btMenuActive = false;
-  // // BT_setMenuActive(false);  // Wyłącz menu Bluetooth
   if (f_displaySleepTime && f_sleepTimerOn) {f_displaySleepTimeSet = true;}
   f_displaySleepTime = false;
-  
-  // Wyłącz menu EQ16 tylko gdy nie jest aktywnie używane
-  // UWAGA: Nie wyłączaj menu EQ16 automatycznie - użytkownik musi to zrobić ręcznie
-  /*
-  if (eq16MenuActive) {
-    eq16MenuActive = false;
-    EQ16_setMenuActive(false);
-  }
-  */
 
   rcInputDigit1 = 0xFF; // czyscimy cyfre 1, flaga pustej zmiennej to FF
   rcInputDigit2 = 0xFF; // czyscimy cyfre 2, flaga pustej zmiennej to FF
@@ -5926,7 +6694,8 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
 
     if (audio.isRunning() == true)
     {
-      client->text("stationtext$" + stationStringWeb);
+     sanitizeUtf8(stationStringWeb);
+     client->text("stationtext$" + stationStringWeb);
     }
     else
     {
@@ -5970,7 +6739,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
       {
         int newStation = msg.substring(8).toInt();
         station_nr = newStation;
-                
+        bank_nr = previous_bank_nr;
         urlPlaying = false;
 
         ir_code = rcCmdOk; // Przypisujemy kod polecenia z pilota
@@ -6157,6 +6926,12 @@ void IRAM_ATTR pulseISR()
       // Sprawdzenie, czy otrzymano pełny 32-bitowy kod IR
       if (bit_count == 32)
       {
+        // Symulacja aktywnosci LED IR
+        #ifdef IR_LED
+        digitalWrite(IR_LED, HIGH);
+        //f_statusLED = 1; 
+        #endif
+        
         // Rozbicie kodu na 4 bajty
         uint8_t ADDR = (ir_code >> 24) & 0xFF;  // Pierwszy bajt
         uint8_t IADDR = (ir_code >> 16) & 0xFF; // Drugi bajt (inwersja adresu)
@@ -6183,17 +6958,33 @@ void IRAM_ATTR pulseISR()
  //runTime2 = esp_timer_get_time();
 }
 
-void displayEqualizer() // Funkcja rysująca menu 3-punktowego equalizera
+void displayEqualizer() // Funkcja rysująca menu equalizera (3-band lub 16-band)
 {
-  // GUARD: Nie rysuj gdy SDPlayer aktywny
-  if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) return;
-
   displayStartTime = millis();  // Uaktulniamy czas dla funkcji auto-pwrotu z menu
   equalizerMenuEnable = true;   // Ustawiamy flage menu equalizera
   timeDisplay = false;          // Wyłaczamy zegar
   displayActive = true;         // Wyswietlacz aktywny
   
-  Serial.println("--Equalizer--");
+  #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+  // ========== WYBÓR TRYBU EQUALIZERA (3-BAND vs 16-BAND) ==========
+  if (eq16ModeSelectActive) {
+    // Ekran wyboru trybu EQ
+    APMS_EQ16::drawModeSelect(u8g2, eq16Mode ? 1 : 0);
+    return;
+  }
+  
+  // ========== TRYB 16-BAND ==========
+  if (eq16Mode) {
+    // Załaduj aktualne wartości do bufora
+    APMS_EQ16::getAll(eq16Gains);
+    // Rysuj edytor 16-band
+    APMS_EQ16::drawEditor(u8g2, eq16Gains, eq16SelectedBand, false);
+    return;
+  }
+  #endif
+  
+  // ========== TRYB 3-BAND (DOMYŚLNY) ==========
+  Serial.println("--Equalizer 3-band--");
   Serial.print("Wartość tonów Niskich/Low:   ");
   Serial.println(toneLowValue);
   Serial.print("Wartość tonów Średnich/Mid:  ");
@@ -6300,11 +7091,6 @@ void displayEqualizer() // Funkcja rysująca menu 3-punktowego equalizera
   u8g2.sendBuffer(); 
 }
 
-// ============================================================================
-// 16-BAND GRAPHIC EQUALIZER FUNCTIONS
-// ============================================================================
-
-// Stara implementacja EQ16 została przeniesiona do EQ16_GraphicEQ.cpp
 
 void displayBasicInfo()
 {
@@ -6568,14 +7354,11 @@ void displayDimmer(bool dimmerON)
 
       if (bankMenuEnable == true)
       {
-        // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
-        if (!sdPlayerOLEDActive) {
-          bankMenuEnable = false;
-          fetchStationsFromServer();
-          changeStation();
-          displayRadio();
-          clearFlags();
-        }
+        bankMenuEnable = false;
+        fetchStationsFromServer();
+        changeStation();
+        if (!sdPlayerOLEDActive) displayRadio(); // Blokuj gdy SDPlayer aktywny
+        clearFlags();
         return;
       }
       else if (bankMenuEnable == false)
@@ -6626,15 +7409,12 @@ void displayDimmer(bool dimmerON)
 
     if (button1.isReleased() && listedStations) 
     {
-      // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
-      if (!sdPlayerOLEDActive) {
-        listedStations = false;
-        volumeSet = false;
-        changeStation();
-        displayRadio();
-        //u8g2.sendBuffer();
-        clearFlags();
-      }
+      listedStations = false;
+      volumeSet = false;
+      changeStation();
+      if (!sdPlayerOLEDActive) displayRadio(); // Blokuj gdy SDPlayer aktywny
+      //u8g2.sendBuffer();
+      clearFlags();
       return;
     }
 
@@ -6644,65 +7424,88 @@ void displayDimmer(bool dimmerON)
   }
 #endif
 
+
 void handleEncoder2StationsVolumeClick()
 {
-  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
-  static int encoderClickCount2 = 0;
-  static unsigned long lastEncoderClickTime2 = 0;
+  // Double-click detection dla aktywacji SD Player (enkoder) - używa ezButton
+  static int encoderClickCount = 0;
+  static unsigned long lastEncoderClickTime = 0;
   
-  // Sprawdź triple-click tylko gdy SD Player nieaktywny
-  if (!sdPlayerOLEDActive) {
-    bool isPressed = (digitalRead(SW_PIN2) == LOW);
-    static bool lastPressState2 = false;
+  // Sprawdź double-click tylko gdy SD Player nieaktywny - użyj button2.isReleased()
+  if (!sdPlayerOLEDActive && button2.isReleased()) {
+    unsigned long now = millis();
     
-    if (isPressed && !lastPressState2) {
-      // Nowe kliknięcie
-      unsigned long now = millis();
-      if (now - lastEncoderClickTime2 < 600) { // 600ms okno jak w IR Key9
-        encoderClickCount2++;
-      } else {
-        encoderClickCount2 = 1; // Reset po timeout
-      }
-      lastEncoderClickTime2 = now;
-      
-      if (encoderClickCount2 >= 3) {
-        // Triple-click wykryty - aktywuj SD Player
-        if (g_sdPlayerOLED) {
-          g_sdPlayerOLED->activate();
-        }
-        encoderClickCount2 = 0; // Reset
-      }
+    // Sprawdź czy to szybkie kliknięcie (w oknie 600ms)
+    if (now - lastEncoderClickTime < 600) {
+      encoderClickCount++;
+      Serial.printf("[Encoder2] Kliknięcie #%d\n", encoderClickCount);
+    } else {
+      encoderClickCount = 1; // Reset po timeout
+      Serial.println("[Encoder2] Pierwsze kliknięcie (reset licznika)");
     }
-    lastPressState2 = isPressed;
+    lastEncoderClickTime = now;
+    
+    // Sprawdź czy to double-click
+    if (encoderClickCount >= 2) {
+      // Double-click wykryty - aktywuj SD Player
+      if (g_sdPlayerOLED) {
+        // Zapamiętaj aktualny bank i stację przed aktywacją
+        sdPlayerReturnBank = bank_nr;
+        sdPlayerReturnStation = station_nr;
+        Serial.printf("[SDPlayer] DOUBLE-CLICK wykryty! Zapisano pozycję: Bank %d, Stacja %d\n", sdPlayerReturnBank, sdPlayerReturnStation);
+        
+        g_sdPlayerOLED->activate();
+        sdPlayerOLEDActive = true;
+        Serial.println("[DOUBLE-CLICK] Aktywacja SD Player - handleEncoder2StationsVolumeClick");
+      }
+      encoderClickCount = 0; // Reset licznika
+      return;
+    }
   }
   
-  // Obsługa SDPlayer OLED
+  // =============== OBSŁUGA ENKODERA DLA ZINTEGROWANYCH MODUŁÓW ===============
+  
+  // 1. SDPlayer - obsługa enkodera gdy SDPlayer jest aktywny
   if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
-    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    // Obsługa przytrzymania z różnymi czasami:
+    // < 1s      = krótkie kliknięcie (play/pause)
+    // 3-5s     = średnie przytrzymanie (select track)
+    // > 6s     = długie przytrzymanie (tryb volume lub wyjście)
     static unsigned long buttonPressStartTime = 0;
     static bool wasPressed = false;
+    static bool mediumHoldExecuted = false;
+    static bool longHoldExecuted = false;
     bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
     
     if (isPressed && !wasPressed) {
       // Przycisk został właśnie wciśnięty
       buttonPressStartTime = millis();
       wasPressed = true;
+      mediumHoldExecuted = false;
+      longHoldExecuted = false;
     } else if (!isPressed && wasPressed) {
       // Przycisk został zwolniony
       wasPressed = false;
       unsigned long pressDuration = millis() - buttonPressStartTime;
       
-      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
-      if (pressDuration < 4000) {
+      // Krótkie kliknięcie (< 3s) - jeśli nie wykonano akcji przytrzymania
+      if (pressDuration < 3000 && !mediumHoldExecuted && !longHoldExecuted) {
         g_sdPlayerOLED->onEncoderButton();
       }
     } else if (isPressed && wasPressed) {
       // Przycisk jest ciągle przytrzymany - sprawdzamy czas
       unsigned long pressDuration = millis() - buttonPressStartTime;
-      if (pressDuration >= 4000) {
-        // Długie przytrzymanie - wyjście do radia
-        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
-        wasPressed = false; // Reset aby nie wywoływać wielokrotnie
+      
+      // Średnie przytrzymanie (3-5s) - zatwierdź wybór utworu
+      if (pressDuration >= 3000 && pressDuration < 6000 && !mediumHoldExecuted) {
+        g_sdPlayerOLED->onEncoderButtonMediumHold(pressDuration);
+        mediumHoldExecuted = true;
+      }
+      // Długie przytrzymanie (>6s) - przełącz tryb volume
+      else if (pressDuration >= 6000 && !longHoldExecuted) {
+        g_sdPlayerOLED->onEncoderButtonLongHold(pressDuration);
+        longHoldExecuted = true;
+        wasPressed = false; // Reset
         return;
       }
     }
@@ -6721,6 +7524,8 @@ void handleEncoder2StationsVolumeClick()
     return; // Wyjdź z funkcji - SDPlayer obsłużony
   }
   
+  // ============== KONIEC OBSŁUGI MODUŁÓW - kontynuacja normalnej obsługi radia ==============
+  
   CLK_state2 = digitalRead(CLK_PIN2);                       // Odczytanie aktualnego stanu pinu CLK enkodera 2
   if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH)  // Sprawdzenie, czy stan CLK zmienił się na wysoki
   {
@@ -6728,46 +7533,77 @@ void handleEncoder2StationsVolumeClick()
     displayActive = true;
     displayStartTime = millis();
 
-    // Obsługa menu BT enkoderem
-    if (btMenuActive == true)
+    if ((volumeSet == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
     {
+      currentSelection = station_nr - 1;
+
       if (digitalRead(DT_PIN2) == HIGH) 
-      {
-        // // BT_menuUp();
-      } 
+      {  
+        if (listedStations == true)
+        {
+          station_nr--;
+          if (station_nr < 1) {station_nr = stationsCount;} //1;
+          Serial.print("Numer stacji do tyłu: "); Serial.println(station_nr);
+          
+          scrollUp();
+        }
+        else
+        {
+          if (maxSelection() - currentSelection < maxVisibleLines) // 98 - 98 = 0 < 4 = YES
+          {
+            firstVisibleLine = maxSelection() - maxVisibleLines + 1; // 98 - 4- 1 -> 93, za daleko, musi byc 95
+          } 
+          else 
+          {
+            firstVisibleLine = currentSelection;
+          }
+          /*
+          if (currentSelection > 0) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
+          { 
+            if (currentSelection < firstVisibleLine) {firstVisibleLine = currentSelection;}
+          } 
+          else // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości 
+          {  
+            if (currentSelection == maxSelection()) {firstVisibleLine = currentSelection - maxVisibleLines + 1;} // Ustaw pierwszą widoczną linię na najwyższą
+            
+          } 
+          */  
+        } 
+      }  
       else 
       {
-        // // BT_menuDown();
-      }
-      // // BT_displayMenu(u8g2);
-      u8g2.sendBuffer();
-    }
-    else if ((volumeSet == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
-    {
-      station_nr = currentSelection + 1;
-      if (digitalRead(DT_PIN2) == HIGH) 
-      {
-        station_nr--;
-        //if (listedStations == 1) station_nr--;
-        if (station_nr < 1) 
+        if (listedStations == true)
         {
-          station_nr = stationsCount;//1;
+          station_nr++;
+          //if (listedStations == 1) station_nr++;
+          if (station_nr > stationsCount) {station_nr = 1;}//stationsCount;
+          Serial.print("Numer stacji do przodu: "); Serial.println(station_nr);
+
+          scrollDown();
         }
-        Serial.print("Numer stacji do tyłu: ");
-        Serial.println(station_nr);
-        scrollUp();
-      } 
-      else 
-      {
-        station_nr++;
-        //if (listedStations == 1) station_nr++;
-        if (station_nr > stationsCount) 
-        {
-          station_nr = 1;//stationsCount;
+        else
+        {    
+                 
+          //currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
+          
+          if (maxSelection() - currentSelection < maxVisibleLines) {firstVisibleLine = maxSelection() - maxVisibleLines + 1;} else {firstVisibleLine = currentSelection;}
+          /*
+          if (currentSelection > 0)
+          {
+            if (currentSelection < firstVisibleLine) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
+            {
+              firstVisibleLine = currentSelection;
+            }
+          } 
+          else 
+          {  // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości
+            if (currentSelection = maxSelection())
+            {
+              firstVisibleLine = currentSelection - maxVisibleLines + 1;  // Ustaw pierwszą widoczną linię na najwyższą
+            }
+          }
+          */ 
         }
-        Serial.print("Numer stacji do przodu: ");
-        Serial.println(station_nr);
-        scrollDown();
       }
       displayStations();
     } 
@@ -6787,47 +7623,26 @@ void handleEncoder2StationsVolumeClick()
       if (digitalRead(DT_PIN2) == HIGH) 
       {
         bank_nr--;
-        if (bank_nr < 1) 
-        {
-          bank_nr = bank_nr_max;
-        }
+        if (bank_nr < 1) {bank_nr = bank_nr_max;}
       } 
       else 
       {
         bank_nr++;
-        if (bank_nr > bank_nr_max) 
-        {
-          bank_nr = 1;
-        }
+        if (bank_nr > bank_nr_max) {bank_nr = 1;}
       }
       bankMenuDisplay();
     }
   }
   prev_CLK_state2 = CLK_state2;
-    
-  
-  // Obsługa przycisku enkodera dla menu BT
-  if ((button2.isPressed()) && (btMenuActive == true)) 
-  {
-    Serial.println("DEBUG BT: Encoder button pressed - selecting menu option");
-    // BT_menuSelect();
-    // BT_displayMenu(u8g2);
-    u8g2.sendBuffer();
-  }
-  
+      
   if ((button2.isReleased()) && (listedStations == true)) 
   {
-    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
-    if (!sdPlayerOLEDActive) {
-      listedStations = false;
-      volumeSet = false;
-      changeStation();
-      if (!EQ16_isMenuActive()) {
-        displayRadio();
-        u8g2.sendBuffer();
-      }
-      clearFlags();
-    }
+    listedStations = false;
+    volumeSet = false;
+    changeStation();
+    if (!sdPlayerOLEDActive) displayRadio(); // Blokuj gdy SDPlayer aktywny
+    u8g2.sendBuffer();
+    clearFlags();
   }
 
   if ((button2.isPressed()) && (listedStations == false) && (bankMenuEnable == false)) 
@@ -6839,88 +7654,101 @@ void handleEncoder2StationsVolumeClick()
     volumeDisplay();  // Po nacisnieciu enkodera2 wyswietlamy menu głośnosci
   }
 
-
   if ((button2.isPressed()) && (bankMenuEnable == true)) 
   {
-    // NIE ZMIENIAJ STACJI GDY SD PLAYER AKTYWNY
-    if (!sdPlayerOLEDActive) {
-      previous_bank_nr = bank_nr;
+    station_nr = 1;
+    fetchStationsFromServer();
+    changeStation();
+    u8g2.clearBuffer();
+    if (!sdPlayerOLEDActive) displayRadio(); // Blokuj gdy SDPlayer aktywny
 
-      station_nr = 1;
-
-      fetchStationsFromServer();
-      changeStation();
-      u8g2.clearBuffer();
-      if (!EQ16_isMenuActive()) {
-        displayRadio();
-      }
-
-      volumeSet = false;
-      bankMenuEnable = false;
-    }
+    volumeSet = false;
+    bankMenuEnable = false;
   }
 
 }
 
+
+
 void handleEncoder2VolumeStationsClick()
 {
-  // Triple-click detection dla aktywacji SD Player (podobnie jak IR Key9)
+  // Double-click detection dla aktywacji SD Player (enkoder) - używa ezButton
   static int encoderClickCount = 0;
   static unsigned long lastEncoderClickTime = 0;
   
-  // Sprawdź triple-click tylko gdy SD Player nieaktywny
-  if (!sdPlayerOLEDActive) {
-    bool isPressed = (digitalRead(SW_PIN2) == LOW);
-    static bool lastPressState = false;
+  // Sprawdź double-click tylko gdy SD Player nieaktywny - użyj button2.isReleased()
+  if (!sdPlayerOLEDActive && button2.isReleased()) {
+    unsigned long now = millis();
     
-    if (isPressed && !lastPressState) {
-      // Nowe kliknięcie
-      unsigned long now = millis();
-      if (now - lastEncoderClickTime < 600) { // 600ms okno jak w IR Key9
-        encoderClickCount++;
-      } else {
-        encoderClickCount = 1; // Reset po timeout
-      }
-      lastEncoderClickTime = now;
-      
-      if (encoderClickCount >= 3) {
-        // Triple-click wykryty - aktywuj SD Player
-        if (g_sdPlayerOLED) {
-          g_sdPlayerOLED->activate();
-        }
-        encoderClickCount = 0; // Reset
-      }
+    // Sprawdź czy to szybkie kliknięcie (w oknie 600ms)
+    if (now - lastEncoderClickTime < 600) {
+      encoderClickCount++;
+      Serial.printf("[Encoder2] Kliknięcie #%d\n", encoderClickCount);
+    } else {
+      encoderClickCount = 1; // Reset po timeout
+      Serial.println("[Encoder2] Pierwsze kliknięcie (reset licznika)");
     }
-    lastPressState = isPressed;
+    lastEncoderClickTime = now;
+    
+    // Sprawdź czy to double-click
+    if (encoderClickCount >= 2) {
+      // Double-click wykryty - aktywuj SD Player
+      if (g_sdPlayerOLED) {
+        // Zapamiętaj aktualny bank i stację przed aktywacją
+        sdPlayerReturnBank = bank_nr;
+        sdPlayerReturnStation = station_nr;
+        Serial.printf("[SDPlayer] DOUBLE-CLICK wykryty! Zapisano pozycję: Bank %d, Stacja %d\n", sdPlayerReturnBank, sdPlayerReturnStation);
+        
+        g_sdPlayerOLED->activate();
+        sdPlayerOLEDActive = true;
+        Serial.println("[DOUBLE-CLICK] Aktywacja SD Player - handleEncoder2VolumeStationsClick");
+      }
+      encoderClickCount = 0; // Reset licznika
+      return;
+    }
   }
   
   // Obsługa SDPlayer OLED
   if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
-    // Sprawdzanie długiego przytrzymania (4 sekundy)
+    // Obsługa przytrzymania z różnymi czasami:
+    // < 1s      = krótkie kliknięcie (play/pause)
+    // 3-5s     = średnie przytrzymanie (select track)
+    // > 6s     = długie przytrzymanie (tryb volume lub wyjście)
     static unsigned long buttonPressStartTime2 = 0;
     static bool wasPressed2 = false;
+    static bool mediumHoldExecuted = false;
+    static bool longHoldExecuted = false;
     bool isPressed = (digitalRead(SW_PIN2) == LOW); // Zakładając aktywne LOW
     
     if (isPressed && !wasPressed2) {
       // Przycisk został właśnie wciśnięty
       buttonPressStartTime2 = millis();
       wasPressed2 = true;
+      mediumHoldExecuted = false;
+      longHoldExecuted = false;
     } else if (!isPressed && wasPressed2) {
       // Przycisk został zwolniony
       wasPressed2 = false;
       unsigned long pressDuration = millis() - buttonPressStartTime2;
       
-      // Jeśli było krótkie kliknięcie (mniej niż 4 sekundy)
-      if (pressDuration < 4000) {
+      // Krótkie kliknięcie (< 3s) - jeśli nie wykonano akcji przytrzymania
+      if (pressDuration < 3000 && !mediumHoldExecuted && !longHoldExecuted) {
         g_sdPlayerOLED->onEncoderButton();
       }
     } else if (isPressed && wasPressed2) {
       // Przycisk jest ciągle przytrzymany - sprawdzamy czas
       unsigned long pressDuration = millis() - buttonPressStartTime2;
-      if (pressDuration >= 4000) {
-        // Długie przytrzymanie - wyjście do radia
-        g_sdPlayerOLED->onEncoderButtonHold(pressDuration);
-        wasPressed2 = false; // Reset aby nie wywoływać wielokrotnie
+      
+      // Średnie przytrzymanie (3-5s) - zatwierdź wybór utworu
+      if (pressDuration >= 3000 && pressDuration < 6000 && !mediumHoldExecuted) {
+        g_sdPlayerOLED->onEncoderButtonMediumHold(pressDuration);
+        mediumHoldExecuted = true;
+      }
+      // Długie przytrzymanie (>6s) - przełącz tryb volume
+      else if (pressDuration >= 6000 && !longHoldExecuted) {
+        g_sdPlayerOLED->onEncoderButtonLongHold(pressDuration);
+        longHoldExecuted = true;
+        wasPressed2 = false; // Reset
         return;
       }
     }
@@ -6939,6 +7767,8 @@ void handleEncoder2VolumeStationsClick()
     return; // Wyjdź z funkcji - SDPlayer obsłużony
   }
   
+  // ============== KONIEC OBSŁUGI MODUŁÓW - kontynuacja normalnej obsługi radia ==============
+  
   CLK_state2 = digitalRead(CLK_PIN2);                       // Odczytanie aktualnego stanu pinu CLK enkodera 2
   if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH)  // Sprawdzenie, czy stan CLK zmienił się na wysoki
   {
@@ -6946,21 +7776,7 @@ void handleEncoder2VolumeStationsClick()
     displayActive = true;
     displayStartTime = millis();
 
-    // Obsługa menu BT enkoderem
-    if (btMenuActive == true)
-    {
-      if (digitalRead(DT_PIN2) == HIGH) 
-      {
-        // BT_menuUp();
-      } 
-      else 
-      {
-        // BT_menuDown();
-      }
-      // BT_displayMenu(u8g2);
-      u8g2.sendBuffer();
-    }
-    else if ((listedStations == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
+    if ((listedStations == false) && (bankMenuEnable == false))  // Przewijanie listy stacji radiowych
     {
       if (digitalRead(DT_PIN2) == HIGH) 
       {
@@ -6987,49 +7803,47 @@ void handleEncoder2VolumeStationsClick()
       }
     }
     #ifndef twoEncoders // Kompilujemy ten blok jesli nie ma zdefinionwanego "twoEncoders", dla 2 enkoderów jest niepotrzebny
-    if ((listedStations == true) && (bankMenuEnable == false)) 
-    {
-      station_nr = currentSelection + 1;
-      if (digitalRead(DT_PIN2) == HIGH) 
+      if ((listedStations == true) && (bankMenuEnable == false)) 
       {
-        station_nr--;
-        if (station_nr < 1) { station_nr = stationsCount; }
-        scrollUp();
-      } 
-      else 
-      {
-        station_nr++;
-        if (station_nr > stationsCount) { station_nr = 1; }  //stationsCount;
-        scrollDown();
+        station_nr = currentSelection + 1;
+        if (digitalRead(DT_PIN2) == HIGH) 
+        {
+          station_nr--;
+          if (station_nr < 1) { station_nr = stationsCount; }
+          scrollUp();
+        } 
+        else 
+        {
+          station_nr++;
+          if (station_nr > stationsCount) { station_nr = 1; }  //stationsCount;
+          scrollDown();
+        }
+        displayStations();
       }
-      displayStations();
-    }
 
-    if (bankMenuEnable == true)  // Przewijanie listy banków stacji radiowych
-    {
-      if (digitalRead(DT_PIN2) == HIGH) 
+      if (bankMenuEnable == true)  // Przewijanie listy banków stacji radiowych
       {
-        bank_nr--;
-        if (bank_nr < 1) 
+        if (digitalRead(DT_PIN2) == HIGH) 
         {
-          bank_nr = bank_nr_max;
-        }
-      } 
-      else 
-      {
-        bank_nr++;
-        if (bank_nr > bank_nr_max) 
+          bank_nr--;
+          if (bank_nr < 1) 
+          {
+            bank_nr = bank_nr_max;
+          }
+        } 
+        else 
         {
-          bank_nr = 1;
+          bank_nr++;
+          if (bank_nr > bank_nr_max) 
+          {
+            bank_nr = 1;
+          }
         }
+        bankMenuDisplay();
       }
-      bankMenuDisplay();
-    }
     #endif    
   }
   prev_CLK_state2 = CLK_state2;
-
-
 
 
   if ((button2.isReleased()) && (encoderButton2 == true))  // jestesmy juz w menu listy stacji to zmieniamy stacje po nacisnieciu przycisku
@@ -7039,24 +7853,20 @@ void handleEncoder2VolumeStationsClick()
   }
 
   #ifdef twoEncoders
-
-   if ((button2.isPressed())) // zmieniamy stację
-  {
-    volumeMute = !volumeMute;
-    if (volumeMute == true)
+    if ((button2.isPressed())) // zmieniamy stację
     {
-      audio.setVolume(0);   
-    }
-    else if (volumeMute == false)
-    {
-      audio.setVolume(volumeValue);   
-    }
-    if (!EQ16_isMenuActive()) {
+      volumeMute = !volumeMute;
+      if (volumeMute == true)
+      {
+        audio.setVolume(0);   
+      }
+      else if (volumeMute == false)
+      {
+        audio.setVolume(volumeValue);   
+      }
       displayRadio();
-      u8g2.sendBuffer(); // Natychmiastowa aktualizacja ekranu po MUTE
+      return;
     }
-    return;
-  }
   #endif
 
   if ((button2.isPressed())) // zmieniamy stację
@@ -7079,32 +7889,24 @@ void handleEncoder2VolumeStationsClick()
       listedStations = true;
       currentSelection = station_nr - 1; 
 
-      if (currentSelection >= 0)
+      if (maxSelection() - currentSelection < maxVisibleLines) 
       {
-        if (currentSelection < firstVisibleLine) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
-        {
-          firstVisibleLine = currentSelection;
-        }
-      }
+        firstVisibleLine = maxSelection() - maxVisibleLines + 1;
+      } 
       else 
-      {  // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości
-        if (currentSelection == maxSelection())
-        {
-        firstVisibleLine = currentSelection - maxVisibleLines + 1;  // Ustaw pierwszą widoczną linię na najwyższą
-        }
-      }   
+      {
+        firstVisibleLine = currentSelection;
+      }
       displayStations();
-      //Serial.println("debug--------------------------------------------------> button 2 PRESSED station list");
     } 
       
-    //else if ((listedStations == false) && (bankMenuEnable == true) && (volumeSet == false)) 
     else if ((bankMenuEnable == true) && (volumeSet == false)) 
     {
       displayStartTime = millis();
       timeDisplay = false;
       displayActive = true;
       
-      previous_bank_nr = bank_nr;
+      //previous_bank_nr = bank_nr;
       station_nr = 1;
 
       listedStations = false;
@@ -7116,58 +7918,10 @@ void handleEncoder2VolumeStationsClick()
       changeStation();
       u8g2.clearBuffer();
       displayRadio();
-      //u8g2.sendBuffer();
-
-    }
-    
+    }  
   }
 }
 
-/*
-void drawSwitch(uint8_t x, uint8_t y, bool state) // Ikona przełacznika szeroka (x) na 21, wysoka(y) na 10
-{
- u8g2.setFont(u8g2_font_spleen5x8_mf);
- y = y - 9;
- u8g2.drawRFrame(x, y, 21, 10, 1);
- 
- if (state == 1)          // Rysujemy przełacznik w pozycji ON z napisem
- {
-  u8g2.drawRBox(x + 8, y, 13, 10, 3); 
-  u8g2.setDrawColor(0);
-  u8g2.drawStr(x + 10,y + 8, "ON");
-  u8g2.setDrawColor(1);
- }
-  else if (state == 0)   // Rysujemy w pozycji OFF
-  {
-    u8g2.drawRBox(x, y, 11, 10, 3);  
-  }
-  u8g2.setFont(spleen6x12PL); // Przywracamy podstawową czcionkę
-}
-*/
-/*
-void displayConfig()
-{
-  displayStartTime = millis();  // Uaktulniamy czas dla funkcji auto-pwrotu z menu
-  equalizerMenuEnable = true;   // Ustawiamy flage menu equalizera
-  timeDisplay = false;          // Wyłaczamy zegar
-  displayActive = true;         // Wyswietlacz aktywny
-  
-  u8g2.setFont(spleen6x12PL);
-  
-  // Strona 1
-  u8g2.clearBuffer();
-  u8g2.drawStr(0, 10, "Menu Config:");
-  //drawSwitch(0,15,displayAutoDimmerOn); u8g2.setCursor(25,24); u8g2.print("Display auto dimmer   Auto dimmmer time:" + String(displayAutoDimmerTime) + "s");
-  
-  //u8g2.setCursor(0,25); u8g2.print("Display auto dimmer:" + String(ESP.getEfuseMac()) + ",  FW Ver.:" + String(softwareRev));
-    
-  u8g2.setCursor(0,24); u8g2.print("Display auto dimmer on/off"); drawSwitch(220,24,displayAutoDimmerOn); 
-  u8g2.setCursor(0,36); u8g2.print("Auto dimmer time:"); u8g2.setCursor(225,36); u8g2.print(String(displayAutoDimmerTime) + "s");
-  u8g2.setCursor(0,47); u8g2.print("Auto dimmer value 0-14:              14");
-  u8g2.setCursor(0,58); u8g2.print("Night dimmer value 0-14:              0"); 
-  u8g2.sendBuffer();
-}
-*/
 
 void stationNameSwap()
 {
@@ -7177,21 +7931,34 @@ void stationNameSwap()
 
 void saveConfig() 
 {
-  /*
-  u8g2.clearBuffer();
-  u8g2.setFont(u8g2_font_fub14_tf); // cziocnka 14x11
-  u8g2.drawStr(1, 33, "Saving configuration"); // 8 znakow  x 11 szer
-  u8g2.sendBuffer();
-  */
+  Serial.println("=== saveConfig() START ===");
   
-  // Sprawdź, czy plik istnieje
+  #ifdef AUTOSTORAGE
+    // KRYTYCZNE: Sprawdz czy wskaznik storage jest prawidlowy
+    if (_storage == nullptr) {
+      Serial.println("BLAD KRYTYCZNY: _storage jest NULL!");
+      return;
+    }
+  #endif
+  
+  Serial.printf("STORAGE dostepny: %s\n", storageTextName);
+  
+  // Usuń stary plik jeśli istnieje (FILE_WRITE na ESP32 dopisuje zamiast nadpisywać!)
   if (STORAGE.exists("/config.txt")) 
   {
-    Serial.println("Plik config.txt już istnieje.");
-
-    // Otwórz plik do zapisu i nadpisz aktualną wartość konfiguracji
-    myFile = STORAGE.open("/config.txt", FILE_WRITE);
-    if (myFile) 
+    Serial.println("Plik config.txt istnieje - usuwam...");
+    if (STORAGE.remove("/config.txt")) {
+      Serial.println("Stary plik usuniety pomyslnie");
+    } else {
+      Serial.println("BLAD: Nie mozna usunac starego pliku!");
+      return;
+    }
+  }
+  
+  // Utwórz nowy plik
+  Serial.println("Tworzenie nowego pliku config.txt...");
+  myFile = STORAGE.open("/config.txt", FILE_WRITE);
+  if (myFile) 
 	  {
       myFile.println("#### Evo Web Radio Config File ####");
       myFile.print("Display Brightness =");    myFile.print(displayBrightness); myFile.println(";");
@@ -7218,66 +7985,50 @@ void saveConfig()
       myFile.print("Radio switch to standby after Power Fail =");    myFile.print(f_sleepAfterPowerFail); myFile.println(";");
       myFile.println("Volume fade on station change and power off =" + String(f_volumeFadeOn) + ";");
       myFile.println("Save Always Station Bank Volume or only during power off =" + String(f_saveVolumeStationAlways) + ";");
+      myFile.println("Power Off Animation =" + String(f_powerOffAnimation) + ";");
+      myFile.println("BT Module UART Enabled =" + String(btModuleEnabled) + ";");
+      myFile.println("Analyzer FFT Enabled =" + String(analyzerEnabled) + ";");
+      myFile.println("Analyzer Styles =" + String(analyzerStyles) + ";");
+      myFile.println("Analyzer Preset =" + String(analyzerPreset) + ";");
+      myFile.println("Display Mode 6 Enabled =" + String(displayMode6Enabled) + ";");
+      myFile.println("Display Mode 8 Enabled =" + String(displayMode8Enabled) + ";");
+      myFile.println("Display Mode 10 Enabled =" + String(displayMode10Enabled) + ";");
+      myFile.println("SDPlayer Style 1 Enabled =" + String(sdPlayerStyle1Enabled) + ";");
+      myFile.println("SDPlayer Style 2 Enabled =" + String(sdPlayerStyle2Enabled) + ";");
+      myFile.println("SDPlayer Style 3 Enabled =" + String(sdPlayerStyle3Enabled) + ";");
+      myFile.println("SDPlayer Style 4 Enabled =" + String(sdPlayerStyle4Enabled) + ";");
+      myFile.println("SDPlayer Style 5 Enabled =" + String(sdPlayerStyle5Enabled) + ";");
+      myFile.println("SDPlayer Style 6 Enabled =" + String(sdPlayerStyle6Enabled) + ";");
+      myFile.println("SDPlayer Style 7 Enabled =" + String(sdPlayerStyle7Enabled) + ";");
+      myFile.println("SDPlayer Style 9 Enabled =" + String(sdPlayerStyle9Enabled) + ";");
+      myFile.println("SDPlayer Style 10 Enabled =" + String(sdPlayerStyle10Enabled) + ";");
+      myFile.println("SDPlayer Style 11 Enabled =" + String(sdPlayerStyle11Enabled) + ";");
+      myFile.println("SDPlayer Style 12 Enabled =" + String(sdPlayerStyle12Enabled) + ";");
+      myFile.println("SDPlayer Style 13 Enabled =" + String(sdPlayerStyle13Enabled) + ";");
+      myFile.println("SDPlayer Style 14 Enabled =" + String(sdPlayerStyle14Enabled) + ";");
       
-      myFile.println("FFT Analyzer for Style 5-8 =" + String(eqAnalyzerOn ? 1 : 0) + ";");
-      myFile.println("Analyzer Styles Mode =" + String(analyzerStylesMode) + ";");
-      myFile.println("Analyzer Current Preset =" + String(analyzerCurrentPreset) + ";");
-
+      myFile.flush();  // Wymuś zapis do pamięci fizycznej
       myFile.close();
-      Serial.println("Aktualizacja config.txt na karcie SD");
-    } 
-	  else 
-	  {
-      Serial.println("Błąd podczas otwierania pliku config.txt.");
-    }
+      
+      // Weryfikacja zapisu
+      delay(100);
+      if (STORAGE.exists("/config.txt")) {
+        Serial.println("Weryfikacja: Plik config.txt zostal zapisany");
+      } else {
+        Serial.println("BLAD WERYFIKACJI: Plik config.txt NIE istnieje po zapisie!");
+      }
+      
+      Serial.println("=== CONFIG ZAPISANY POMYSLNIE ===");
+      Serial.printf("Saved values: brightness=%d, dimmer=%d, analyzerEnabled=%d, analyzerStyles=%d\n", 
+                    displayBrightness, dimmerDisplayBrightness, analyzerEnabled, analyzerStyles);
+      Serial.printf("analyzerPreset=%d\n", analyzerPreset);
   } 
   else 
   {
-    Serial.println("Plik config.txt nie istnieje. Tworzenie...");
-
-    // Utwórz plik i zapisz w nim aktualne wartości konfiguracji
-    myFile = STORAGE.open("/config.txt", FILE_WRITE);
-    if (myFile) 
-	  {
-      myFile.println("#### Evo Web Radio Config File ####");
-      myFile.print("Display Brightness =");    myFile.print(displayBrightness); myFile.println(";");
-      myFile.print("Dimmer Display Brightness =");    myFile.print(dimmerDisplayBrightness); myFile.println(";");
-      myFile.print("Auto Dimmer Time ="); myFile.print(displayAutoDimmerTime); myFile.println(";");
-      myFile.print("Auto Dimmer On ="); myFile.print(displayAutoDimmerOn); myFile.println(";");
-		  myFile.println("Voice Info Every Hour =" + String(timeVoiceInfoEveryHour) + ";");
-      myFile.println("VU Meter Mode =" + String(vuMeterMode) + ";");
-      myFile.println("Encoder Function Order  =" + String(encoderFunctionOrder) + ";");
-      myFile.println("Startup Display Mode  =" + String(displayMode) + ";");
-      myFile.println("VU Meter On  =" + String(vuMeterOn) + ";");
-      myFile.println("VU Meter Refresh Time  =" + String(vuMeterRefreshTime) + ";");
-      myFile.println("Scroller Refresh Time =" + String(scrollingRefresh) + ";");
-      myFile.println("ADC Keyboard Enabled =" + String(adcKeyboardEnabled) + ";");
-      myFile.println("Display Power Save Enabled =" + String(displayPowerSaveEnabled) + ";");  
-      myFile.println("Display Power Save Time =" + String(displayPowerSaveTime) + ";");
-      myFile.println("Max Volume settings Extended =" + String(maxVolumeExt) + ";");
-      myFile.println("VU Meter Peak Hold On =" + String(vuPeakHoldOn) + ";");
-      myFile.println("VU Meter Smooth On =" + String(vuSmooth) + ";");
-      myFile.println("VU Meter Rise Speed =" + String(vuRiseSpeed) + ";");
-      myFile.println("VU Meter Fall Speed =" + String(vuFallSpeed) + ";");
-      myFile.println("Display Clock in Sleep =" + String(f_displayPowerOffClock) + ";");
-      myFile.print("Dimmer Sleep Display Brightness =");    myFile.print(dimmerSleepDisplayBrightness); myFile.println(";");
-      myFile.print("Radio goes to sleep after Power Fail =");    myFile.print(f_sleepAfterPowerFail); myFile.println(";");
-      myFile.println("Volume fade on station change and power off =" + String(f_volumeFadeOn) + ";");
-      myFile.println("Save Always Station Bank Volume or only during power off =" + String(f_saveVolumeStationAlways) + ";");
-      myFile.println("FFT Analyzer for Style 5-8 =" + String(eqAnalyzerOn ? 1 : 0) + ";");
-      myFile.println("Analyzer Styles Mode =" + String(analyzerStylesMode) + ";");
-      myFile.println("Analyzer Current Preset =" + String(analyzerCurrentPreset) + ";");
-      myFile.println("Use EQ16 System =" + String(useEQ16 ? 1 : 0) + ";");
-      myFile.close();
-      Serial.println("Utworzono i zapisano config.txt na karcie SD");
-    } 
-	  else 
-	  {
-      Serial.println("Błąd podczas tworzenia pliku config.txt.");
-    }
+      Serial.println("BLAD: Nie mozna otworzyc pliku config.txt do zapisu!");
   }
-
-
+  
+  Serial.println("=== saveConfig() END ===");
 }
 
 void saveAdcConfig() 
@@ -7363,27 +8114,41 @@ void saveAdcConfig()
 
 void readConfig() 
 {
-
+  Serial.println("=== readConfig() START ===");
+  
+  #ifdef AUTOSTORAGE
+    // KRYTYCZNE: Sprawdz czy wskaznik storage jest prawidlowy
+    if (_storage == nullptr) {
+      Serial.println("BLAD KRYTYCZNY: _storage jest NULL!");
+      return;
+    }
+  #endif
+  
+  Serial.printf("STORAGE dostepny: %s\n", storageTextName);
   Serial.println("Odczyt pliku config.txt z karty");
   String fileName = String("/config.txt"); // Tworzymy nazwę pliku
 
   if (!STORAGE.exists(fileName))               // Sprawdzamy, czy plik istnieje
   {
-    Serial.println("Błąd: Plik nie istnieje.");
+    Serial.println("BLAD: Plik config.txt nie istnieje!");
     configExist = false;
     return;
   }
  
+  Serial.println("Plik config.txt istnieje, otwieranie...");
   File configFile = STORAGE.open(fileName, FILE_READ);// Otwieramy plik w trybie do odczytu
   if (!configFile)  // jesli brak pliku to...
   {
-    Serial.println("Błąd: Nie można otworzyć pliku konfiguracji");
+    Serial.println("BLAD: Nie mozna otworzyc pliku konfiguracji");
     return;
   }
+  
+  Serial.println("Plik otwarty pomyslnie, odczyt danych...");
   // Przechodzimy do odpowiedniego wiersza pliku
   int currentLine = 0;
   String configValue = "";
-  while (configFile.available()) 
+  while (configFile.available() && currentLine < CONFIG_COUNT) 
+
   {
     String line = configFile.readStringUntil(';'); //('\n');
     
@@ -7434,21 +8199,34 @@ void readConfig()
   f_sleepAfterPowerFail = configArray[21];
   f_volumeFadeOn = configArray[22];
   f_saveVolumeStationAlways = configArray[23];
+  f_powerOffAnimation = configArray[24];
+  btModuleEnabled = configArray[25];
+  analyzerEnabled = configArray[26];
+  analyzerStyles = configArray[27];
+  analyzerPreset = configArray[28];
+  displayMode6Enabled = configArray[29];
+  displayMode8Enabled = configArray[30]; // Poprawione z [31] na [30]
+  displayMode10Enabled = configArray[31]; // Poprawione z [30] na [31]
+  sdPlayerStyle1Enabled = configArray[32]; // Poprawione z [31] na [32]
+  sdPlayerStyle2Enabled = configArray[33]; // Poprawione z [32] na [33]
+  sdPlayerStyle3Enabled = configArray[34]; // Poprawione z [33] na [34]
+  sdPlayerStyle4Enabled = configArray[35]; // Poprawione z [34] na [35]
+  sdPlayerStyle5Enabled = configArray[36]; // Poprawione z [35] na [36]
+  sdPlayerStyle6Enabled = configArray[37]; // Poprawione z [36] na [37]
+  sdPlayerStyle7Enabled = configArray[38]; // Poprawione z [37] na [38]
+  sdPlayerStyle9Enabled = configArray[39]; // Poprawione z [38] na [39]
+  sdPlayerStyle10Enabled = configArray[40]; // Poprawione z [39] na [40]
+  sdPlayerStyle11Enabled = configArray[41]; // Poprawione z [40] na [41]
+  sdPlayerStyle12Enabled = configArray[42]; // Poprawione z [41] na [42]
+  sdPlayerStyle13Enabled = configArray[43]; // Poprawione z [42] na [43]
+  sdPlayerStyle14Enabled = configArray[44]; // Poprawione z [43] na [44]
 
-  // FFT analyzer enable (styles 5-8). If config file has no entry yet, defaults to ON.
-  eqAnalyzerOn = (configArray[24] != 0);
-  eqAnalyzerSetFromWeb(eqAnalyzerOn);
-  
-  // Nowe parametry analizatora (używamy wartości bezpośrednio, bez sprawdzania != 0)
-  analyzerStylesMode = configArray[25];       // 0=0-4-5, 1=0-4-6, 2=wszystkie
-  analyzerCurrentPreset = configArray[26];    // 0=Classic, 1=Modern, 2=Compact, 3=Retro, 4=Custom
-  
-  // EQ system preference (EQ16 vs 3-point)
-  useEQ16 = (configArray[27] != 0);           // true=EQ16, false=3-point EQ
-  
-  // Zastosuj ustawienia analizatora
-  analyzerSetStyleMode(analyzerStylesMode);
-  analyzerApplyPreset(analyzerCurrentPreset);
+  Serial.println("=== CONFIG ODCZYTANY POMYSLNIE ===");
+  Serial.printf("Loaded values: brightness=%d, dimmer=%d, analyzerEnabled=%d, analyzerStyles=%d\n", 
+                displayBrightness, dimmerDisplayBrightness, analyzerEnabled, analyzerStyles);
+  Serial.printf("displayMode=%d, encoderFunctionOrder=%d, displayAutoDimmerOn=%d\n",
+                displayMode, encoderFunctionOrder, displayAutoDimmerOn);
+  Serial.println("=== readConfig() END ===");
 
   if (maxVolumeExt == 1)
   { 
@@ -7637,10 +8415,6 @@ void webUrlStationPlay()
     u8g2.drawStr(34, 55, String(url2play).c_str());
     u8g2.sendBuffer();
     
-    station_nr = 0;
-    bank_nr = 0;
-    //stationName = "Remote URL";
-    
     // Połącz z daną stacją
     audio.connecttohost(url2play.c_str());
     urlPlaying = true;
@@ -7648,7 +8422,10 @@ void webUrlStationPlay()
     bank_nr = 0;
     //stationName = stationNameStream;
     stationName = "WEB URL";
-    wsStationChange(0);
+    //wsStationChange(station_nr); // Od teraz Event Audio odpowiada za info o stacji
+    //f_audioInfoRefreshDisplayRadio = true;
+    wsStationChange(0,0);
+    wsAudioRefresh = true;
   } 
   else 
   {
@@ -8037,6 +8814,8 @@ void assignRemoteCodes()
     rcCmdRed = 0xB988;        // Przycisk czerwonej sluchawki - obecnie power
     rcCmdPower = 0xB988;      // Przycisk power - brak obecnie na pilocie
     rcCmdGreen = 0xB992;      // Przycisk zielonej sluchawki - obecnie sleep
+    rcCmdYellow = 0xB993;     // Przycisk żółty - toggle Analyzer
+    rcCmdBlue = 0xB994;       // Przycisk niebieski - REC (nagrywanie radia)
     rcCmdKey0 = 0xB900;       // Przycisk "0"
     rcCmdKey1 = 0xB901;       // Przycisk "1"
     rcCmdKey2 = 0xB902;       // Przycisk "2"
@@ -8170,10 +8949,6 @@ void readTimezone()
 }
 
 
-
-
-
-
 //####################################################################################### OBSŁUGA POWER OFF / SLEEP ####################################################################################### //
 
 // ---- FUNKCJA WYSWIETLA NAPIS NA SRODKU OLEDa duzą czcionka -----
@@ -8221,7 +8996,6 @@ void sleepTimer()
     }
   }
 }
-
 
 void powerOffAnimation() 
 {
@@ -8375,9 +9149,16 @@ void powerOffClock()
     return;  // Zakończ funkcję, gdy nie udało się uzyskać czasu
   }
       
-  seconds2nextMinute = 60 - timeinfo.tm_sec;
-  micros2nextMinute = seconds2nextMinute * 1000000ULL;
   
+  seconds2nextMinute = 60 - timeinfo.tm_sec;
+  micros2nextMinute = seconds2nextMinute * 1000000ULL - (esp_timer_get_time() % 1000000ULL);
+  
+  // ---------- ZABEZPIECZENIE ----------
+  if (micros2nextMinute < 1000) micros2nextMinute = 1000;
+  // -----------------------------------
+
+
+
   //showDots = (timeinfo.tm_sec % 2 == 0); // Parzysta sekunda = pokazuj dwukropek
 
   // Konwertuj godzinę, minutę i sekundę na stringi w formacie "HH:MM:SS"
@@ -8405,15 +9186,73 @@ void powerOff()
   // ---- ZAPIS OSTATNIEGO NR.STACJI, NR.BANKU, POZIOMU VOLUME jesli funkcja saveAlwasy wylaczona ----
   if (!f_saveVolumeStationAlways) {saveVolumeOnSD(); saveStationOnSD();}
   
+  // ---- ZAPIS KONFIGURACJI config.txt ----
+  Serial.println("=== POWER OFF: Zapisywanie konfiguracji ===");
+  
+  #ifdef AUTOSTORAGE
+    // KRYTYCZNE: Sprawdz czy storage jest dostepny
+    if (_storage == nullptr) {
+      Serial.println("BLAD KRYTYCZNY: _storage jest NULL - pomijam zapis!");
+    } else {
+      // Test czy storage jest rzeczywiscie zamontowany
+      Serial.printf("Test storageTextName: %s\n", storageTextName);
+      
+      // Sprobuj sprawdzic czy root directory istnieje
+      bool storageOK = false;
+      if (useSD) {
+        // Test SD card
+        File root = SD.open("/");
+        if (root) {
+          Serial.println("SD card jest dostepna");
+          root.close();
+          storageOK = true;
+        } else {
+          Serial.println("BLAD: SD card nie odpowiada!");
+        }
+      } else {
+        // Test LittleFS
+        File root = LittleFS.open("/");
+        if (root) {
+          Serial.println("LittleFS jest dostepny");
+          root.close();
+          storageOK = true;
+        } else {
+          Serial.println("BLAD: LittleFS nie odpowiada!");
+        }
+      }
+      
+      if (storageOK) {
+        // Storage OK - zapisz konfiguracje
+        Serial.printf("Wartosci przed zapisem: brightness=%d, analyzerEnabled=%d, analyzerStyles=%d\n",
+                      displayBrightness, analyzerEnabled, analyzerStyles);
+        saveConfig();
+        Serial.println("debug Power -> Zapisano config.txt");
+        
+        // ---- ZAPIS USTAWIEŃ ANALIZATORA analyzer.cfg ----
+        analyzerStyleSave();
+        Serial.println("debug Power -> Zapisano analyzer.cfg");
+      } else {
+        Serial.println("BLAD: Storage nie jest zamontowany - POMIJAM ZAPIS!");
+      }
+    }
+  #else
+    // Bez AUTOSTORAGE - standardowy zapis
+    Serial.printf("Wartosci przed zapisem: brightness=%d, analyzerEnabled=%d, analyzerStyles=%d\n",
+                  displayBrightness, analyzerEnabled, analyzerStyles);
+    saveConfig();
+    Serial.println("debug Power -> Zapisano config.txt");
+    analyzerStyleSave();
+    Serial.println("debug Power -> Zapisano analyzer.cfg");
+  #endif
   
   // ---- ANIMACJA POWER OFF, jesli wlaczona ----
-  if (f_powerOffAnimation) {powerOffAnimation(); u8g2.clearBuffer();}
-  
+  if (f_powerOffAnimation) {Serial.println("debug Power -> Animacja PowerOff"); powerOffAnimation(); u8g2.clearBuffer();}
 
   // ---- ZEGAR W TRYBIE POWER OFF pierwsze wywloane celem synch. ntp----
   if (f_displayPowerOffClock)
   {
     u8g2.setPowerSave(0);  // Jesli zegar wlaczony to nie przelaczamy OLEDa w tryb power save
+    Serial.println("debug Power -> Zegar ON");
     powerOffClock();
   } 
   // Wyłącz ekran jesli zegar ma byc wyłaczony
@@ -8438,6 +9277,12 @@ void powerOff()
   // -------------- WYŁACZAMY PERYFERIA ------------------
   WiFi.mode(WIFI_OFF);
   btStop();
+  // -------------- WYŁACZAMY LED na module ESP32 ------------------
+  pinMode(TX, OUTPUT);
+  pinMode(RX, OUTPUT);
+  digitalWrite(TX, HIGH);
+  digitalWrite(RX, HIGH);
+  
   Serial.end();
     
   // ---- USTAWIAMY PRZYCISKI NA ENKODERACH do POWER ON -----
@@ -8454,8 +9299,8 @@ void powerOff()
 
   // --------LED STANDBY (przygotowanie pod przekaźnik) ----------------
   pinMode(STANDBY_LED, OUTPUT);
-  digitalWrite(STANDBY_LED, HIGH); // Dla LED właczonego w trybie Power ON
-  //digitalWrite(STANDBY_LED, LOW); // Dla LED wylaczonego w trybie Power ON
+  digitalWrite(STANDBY_LED, HIGH); // Dla LED wyłączonego w trybie Power ON a właczonego w trybie Standby
+  //digitalWrite(STANDBY_LED, LOW); // Dla LED właczonego w trybie Power ON
 
     
   // ---------------- USTAWIAMY WAKEUP ----------------    
@@ -8468,15 +9313,18 @@ void powerOff()
   #endif
   
   gpio_wakeup_enable((gpio_num_t)SW_PIN2, GPIO_INTR_LOW_LEVEL);
+
+  //gpio_wakeup_enable((gpio_num_t)recv_pin, GPIO_INTR_LOW_LEVEL);
   
 
   esp_sleep_enable_gpio_wakeup();
-
+  
   while (f_powerOff)
   {
     // ---------------- RESET STANÓW IR ----------------
     bit_count = 0;
     ir_code = 0;
+    detachInterrupt(digitalPinToInterrupt(recv_pin)); // WYLACZAMY PRZERWANIE
     delay(10);
 
     // ---------------- DEZAKTYWACJA PERYFERIOW i AKTYWACJA ZEGARA (jesli właczony) ----------------
@@ -8547,7 +9395,7 @@ void powerOff()
       // ------------ LED STANDBY -----------
       pinMode(STANDBY_LED, OUTPUT);
       //digitalWrite(STANDBY_LED, HIGH); // Dla LED właczonego w trybie Power ON
-      digitalWrite(STANDBY_LED, LOW); // Dla LED wylaczonego w trybie Power ON
+      digitalWrite(STANDBY_LED, LOW); // Dla LED wyłączonego w trybie PowerON a właczonego w trybie Standby
       
       delay(800);
 
@@ -8564,84 +9412,37 @@ void powerOff()
 // ---- ŁADOWANIE LOGO STARTOWEGO jesli plik istnieje ----
 bool loadXBM(const char* filename) 
 {
-  File logo = STORAGE.open(filename);
-  if (!logo) 
-  {
-    Serial.println("Debug LOGO -> Brak pliku logo");
-    return false;
-  }
+    File logo = STORAGE.open(filename, FILE_READ);
+    if (!logo) return false;
+  
+    if (logo.size() == 0) {
+        logo.close();
+        return false;
+    }
 
-  bool insideData = false;
-  int index = 0;
+    int index = 0;
 
-  while (logo.available() && index < LOGO_SIZE) 
-  {
-    char c = logo.read();
-    // Szukamy "0x"
-    if (c == '0' && logo.peek() == 'x') 
+    while (logo.available() && index < LOGO_SIZE) 
     {
-      logo.read(); // pomin 'x'
-      // wczytaj 2 cyfry hex
-      char hex1 = logo.read();
-      char hex2 = logo.read();
+        char c = logo.read();
 
-      // konwersja hex -> bajt
-      char hexStr[3] = {hex1, hex2, 0};
-      logo_bits[index++] = strtol(hexStr, NULL, 16);
-    }
-  }
-  logo.close();
-  Serial.println("Debug LOGO -> Logo zaladowane poprawnie.");
-  return true;
-}
+        if (c == '0' && logo.peek() == 'x') 
+        {
+            logo.read(); // skip 'x'
+            
+            char hex1 = logo.read();
+            char hex2 = logo.read();
 
-// ============================================================================
-// OBSŁUGA ENKODERA DLA MENU EQ16
-// ============================================================================
-void handleEQ16Encoder()
-{
-  CLK_state2 = digitalRead(CLK_PIN2);
-  if (CLK_state2 != prev_CLK_state2 && CLK_state2 == HIGH)
-  {
-    timeDisplay = false;
-    displayActive = true;
-    displayStartTime = millis();  // Reset timeout for EQ16
-    
-    Serial.printf("DEBUG EQ16: Encoder turned, mode=%s\n", eq16BandMode ? "band selection" : "gain adjustment");
-    
-    if (eq16BandMode) {
-      // Tryb wyboru pasma
-      if (digitalRead(DT_PIN2) == HIGH) {
-        Serial.println("DEBUG EQ16: selectPrevBand()");
-        EQ16_selectPrevBand();
-      } else {
-        Serial.println("DEBUG EQ16: selectNextBand()");
-        EQ16_selectNextBand();
-      }
-    } else {
-      // Tryb zmiany gain
-      if (digitalRead(DT_PIN2) == HIGH) {
-        Serial.println("DEBUG EQ16: decreaseBandGain()");
-        EQ16_decreaseBandGain();
-      } else {
-        Serial.println("DEBUG EQ16: increaseBandGain()");
-        EQ16_increaseBandGain();
-      }
+            char hexStr[3] = {hex1, hex2, 0};
+            logo_bits[index++] = strtol(hexStr, NULL, 16);
+        }
     }
-    
-    // Odśwież wyświetlacz
-    EQ16_displayMenu();
-  }
+
+    logo.close();
   
-  prev_CLK_state2 = CLK_state2;
-  
-  // Obsługa przycisku - przełączanie trybu band/gain
-  if (button2.isPressed()) {
-    Serial.printf("DEBUG EQ16: Button pressed, switching from %s to ", eq16BandMode ? "band selection" : "gain adjustment");
-    eq16BandMode = !eq16BandMode;
-    Serial.printf("%s mode\n", eq16BandMode ? "band selection" : "gain adjustment");
-    EQ16_displayMenu();  // Odśwież wyświetlacz
-  }
+    if (index < LOGO_SIZE) return false;
+
+    return true;
 }
 
 void startOta()
@@ -8668,6 +9469,1245 @@ void startOta()
   u8g2.sendBuffer();
 }
 
+// =============== FUNKCJE POMOCNICZE DLA SDPLAYER ===============
+// Funkcja seek dla głównego systemu SDPlayer (main.cpp)
+void performSeekAction(int deltaSeconds) {
+  if (deltaSeconds == 0) {
+    Serial.println("[SDPlayer] Seek BŁĄD: deltaSeconds=0");
+    return;
+  }
+  
+  // Próbuj przez WebUI jeśli jest aktywne
+  if (g_sdPlayerWeb && (g_sdPlayerWeb->isPlaying() || g_sdPlayerWeb->isPaused())) {
+    g_sdPlayerWeb->seekRelative(deltaSeconds);
+    Serial.printf("[SDPlayer] Seek WebUI %s %d sec\n",
+                  deltaSeconds > 0 ? "FWD" : "REV", 
+                  abs(deltaSeconds));
+    return;
+  }
+  
+  // Próbuj przez główny audio jeśli SDPlayer gra
+  if (sdPlayerPlayingMusic) {
+    bool seekOk = audio.setTimeOffset(deltaSeconds);
+    
+    if (seekOk) {
+      Serial.printf("[SDPlayer] Seek Audio %s %d sec -> OK\n",
+                    deltaSeconds > 0 ? "FWD" : "REV", 
+                    abs(deltaSeconds));
+    } else {
+      Serial.printf("[SDPlayer] Seek Audio %s %d sec -> FAILED\n",
+                    deltaSeconds > 0 ? "FWD" : "REV", 
+                    abs(deltaSeconds));
+    }
+  } else {
+    Serial.println("[SDPlayer] Seek BŁĄD: Nic nie odtwarza");
+  }
+}
+// ==============================================================
+
+/*---------------------  FUNKCJA PILOT IR  / Obsluga pilota IR w kodzie NEC ---------------------*/ 
+void handleRemote()
+{
+  // USUNIĘTO BLOKADĘ - SDPlayer ma swoją obsługę pilota poniżej
+  
+  if (bit_count == 32) // sprawdzamy czy odczytalismy w przerwaniu pełne 32 bity kodu IR NEC
+  {
+    if (ir_code != 0) // sprawdzamy czy zmienna ir_code nie jest równa 0
+    {
+      
+      detachInterrupt(recv_pin);            // Rozpinamy przerwanie
+      Serial.print("debug IR -> Kod NEC OK:");
+      Serial.print(ir_code, HEX);
+      ir_code = reverse_bits(ir_code,32);   // Rotacja bitów - zmiana porządku z LSB-MSB na MSB-LSB
+      Serial.print("  MSB-LSB: ");
+      Serial.print(ir_code, HEX);
+    
+      uint8_t CMD = (ir_code >> 16) & 0xFF; // Drugi bajt (inwersja adresu)
+      uint8_t ADDR = ir_code & 0xFF;        // Czwarty bajt (inwersja komendy)
+      
+      Serial.print("  ADR:");
+      Serial.print(ADDR, HEX);
+      Serial.print(" CMD:");
+      Serial.println(CMD, HEX);
+      ir_code = ADDR << 8 | CMD;      // Łączymy ADDR i CMD w jedną zmienną 0x ADR CMD
+
+      // Info o przebiegach czasowytch kodu pilota IR
+      Serial.print("debug IR -> puls 9ms:"); 
+      Serial.print(pulse_duration_9ms);
+      Serial.print("  4.5ms:");
+      Serial.print(pulse_duration_4_5ms);
+      Serial.print("  1690us:");
+      Serial.print(pulse_duration_1690us);
+      Serial.print("  560us:");
+      Serial.println(pulse_duration_560us);
+
+
+      fwupd = false;        // Kasujemy flagę aktulizacji OTA gdyby była ustawiona
+      //displayActive = true; // jesli odbierzemy kod z pilota to uatywnij wyswietlacz i wyłacz przyciemnienie OLEDa
+      //displayDimmer(0); // jesli odbierzemy kod z pilota to wyłaczamy przyciemnienie wyswietlacza OLED
+      displayPowerSave(0);
+      
+      // DEBUG: Sprawdź stan SDPlayera
+      if (g_sdPlayerOLED) {
+        Serial.printf("DEBUG IR: SDPlayer ptr=%p active=%d sdPlayerOLEDActive=%d\n", 
+                     g_sdPlayerOLED, g_sdPlayerOLED->isActive(), sdPlayerOLEDActive);
+      }
+      
+      // ===== SDPLAYER PILOT ROUTING (PRIORITY) =====
+      if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
+        // Obsługa dedykowanych przycisków SDPlayera
+        // WYJAŃTEK: Jeśli equalizer jest aktywny, przepuść strzałki i OK do normalnej obsługi
+        if (ir_code == rcCmdBack && !equalizerMenuEnable) {
+          // Przycisk BACK - wyjście do katalogu nadrzędnego
+          g_sdPlayerOLED->onRemoteBack();
+          displayStartTime = millis();
+          timeDisplay = false;
+          displayActive = true;
+          Serial.println("[SDPlayer] BACK button - going up to parent directory");
+        }
+        else if (ir_code == rcCmdArrowUp && !equalizerMenuEnable) {
+          // Jeśli lista utworów jest wyświetlona, nawiguj po niej
+          if (listedTracks) {
+            currentTrackSelection--;
+            if (currentTrackSelection < 0) {
+              currentTrackSelection = tracksCount - 1;
+              // Ustaw scrolling na koniec listy
+              if (tracksCount > maxVisibleTracks) {
+                firstVisibleTrack = tracksCount - maxVisibleTracks;
+              } else {
+                firstVisibleTrack = 0;
+              }
+            }
+            // Dostosuj scrolling
+            else if (currentTrackSelection < firstVisibleTrack) {
+              firstVisibleTrack = currentTrackSelection;
+            }
+            displayTracks();
+            displayStartTime = millis();  // Reset timera auto-play
+          } else {
+            // Standardowa obsługa SDPlayer lub pokaż listę utworów
+            displayStartTime = millis();
+            timeDisplay = false;
+            displayActive = true;
+            
+            // Załaduj listę plików jeśli jeszcze nie była ładowana
+            if (tracksCount == 0) {
+              loadTracksFromSD();
+            }
+            
+            if (tracksCount > 0) {
+              listedTracks = true;
+              // Pokaż listę z miejsca ostatnio odtwarzanego utworu
+              if (lastPlayedTrackIndex >= 0 && lastPlayedTrackIndex < tracksCount) {
+                currentTrackSelection = lastPlayedTrackIndex;
+                // Ustaw scrolling aby wybrany był widoczny
+                if (currentTrackSelection >= maxVisibleTracks) {
+                  firstVisibleTrack = currentTrackSelection - maxVisibleTracks + 1;
+                } else {
+                  firstVisibleTrack = 0;
+                }
+              } else {
+                currentTrackSelection = 0;
+                firstVisibleTrack = 0;
+              }
+              displayTracks();
+            } else {
+              Serial.println("[SDPlayer] Brak utworów na karcie SD!");
+            }
+          }
+        }
+        else if (ir_code == rcCmdArrowDown && !equalizerMenuEnable) {
+          // Jeśli lista utworów jest wyświetlona, nawiguj po niej
+          if (listedTracks) {
+            currentTrackSelection++;
+            if (currentTrackSelection >= tracksCount) {
+              currentTrackSelection = 0;
+              // Ustaw scrolling na początek listy
+              firstVisibleTrack = 0;
+            }
+            // Dostosuj scrolling
+            else if (currentTrackSelection >= firstVisibleTrack + maxVisibleTracks) {
+              firstVisibleTrack = currentTrackSelection - maxVisibleTracks + 1;
+            }
+            displayTracks();
+            displayStartTime = millis();  // Reset timera auto-play
+          } else {
+            // Standardowa obsługa SDPlayer lub pokaż listę utworów
+            displayStartTime = millis();
+            timeDisplay = false;
+            displayActive = true;
+            
+            // Załaduj listę plików jeśli jeszcze nie była ładowana
+            if (tracksCount == 0) {
+              loadTracksFromSD();
+            }
+            
+            if (tracksCount > 0) {
+              listedTracks = true;
+              // Pokaż listę z miejsca ostatnio odtwarzanego utworu
+              if (lastPlayedTrackIndex >= 0 && lastPlayedTrackIndex < tracksCount) {
+                currentTrackSelection = lastPlayedTrackIndex;
+                // Ustaw scrolling aby wybrany był widoczny
+                if (currentTrackSelection >= maxVisibleTracks) {
+                  firstVisibleTrack = currentTrackSelection - maxVisibleTracks + 1;
+                } else {
+                  firstVisibleTrack = 0;
+                }
+              } else {
+                currentTrackSelection = 0;
+                firstVisibleTrack = 0;
+              }
+              displayTracks();
+            } else {
+              Serial.println("[SDPlayer] Brak utworów na karcie SD!");
+            }
+          }
+        }
+        else if (ir_code == rcCmdOk && !equalizerMenuEnable) {
+          // Jeśli lista utworów jest wyświetlona, odtwórz wybrany utwór
+          if (listedTracks && tracksCount > 0) {
+            Serial.print("[SDPlayer] Wybrano utwór: ");
+            Serial.println(trackFiles[currentTrackSelection]);
+            
+            // Zapamiętaj wybrany utwór dla auto-play i powrotu do listy
+            lastPlayedTrackIndex = currentTrackSelection;
+            sdPlayerSessionStartIndex = currentTrackSelection;
+            sdPlayerSessionEndIndex = currentTrackSelection;
+            sdPlayerSessionCompleted = false;
+            saveSDPlayerSessionState();
+            
+            // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+            currentMP3Artist = "";
+            currentMP3Title = "";
+            currentMP3Album = "";
+            
+            // Odtwórz wybrany plik - trackFiles[] już zawiera pełną ścieżkę względną
+            String filePath = "/" + trackFiles[currentTrackSelection];
+            audio.connecttoFS(STORAGE, filePath.c_str());
+            
+            // WALIDACJA: Sprawdź Duration (ochrona przed IntegerDivideByZero)
+            // Czekaj aż Duration > 0 lub timeout 2.5s
+            uint32_t duration = 0;
+            for(int i = 0; i < 50 && duration == 0; i++) {
+              audio.loop();
+              delay(50);
+              duration = audio.getAudioFileDuration();
+            }
+            if (duration == 0) {
+              Serial.println("[SDPlayer] ERROR - Corrupted file (Duration=0)");
+              audio.stopSong();
+              sdPlayerPlayingMusic = false;
+              if (g_sdPlayerWeb) {
+                g_sdPlayerWeb->setCurrentFile("");
+                g_sdPlayerWeb->setIsPlaying(false);
+              }
+            } else {
+              sdPlayerPlayingMusic = true;
+              
+              // KRYTYCZNE: Aktualizuj nazwę pliku i stan odtwarzania w SDPlayerWebUI dla wyświetlacza
+              if (g_sdPlayerWeb) {
+                g_sdPlayerWeb->setCurrentFile(trackFiles[currentTrackSelection]);
+                g_sdPlayerWeb->setIsPlaying(true);  // Ustaw flagę odtwarzania
+              }
+            }
+            
+            // KRYTYCZNE: Wyczyść flagę listy i wymuś odświeżenie ekranu
+            listedTracks = false;
+            displayActive = false;
+            timeDisplay = false;
+            
+            // Wymuś natychmiastowe odświeżenie ekranu SDPlayer
+            u8g2.clearBuffer();
+            delay(50);  // Krótka pauza dla stabilności
+            
+            Serial.printf("[SDPlayer] Odtwarzanie rozpoczęte (indeks %d) - ekran zostanie odświeżony przez SDPlayerOLED.loop()\n", lastPlayedTrackIndex);
+          } else {
+            // Standardowa obsługa OK w SDPlayer
+            g_sdPlayerOLED->onRemoteOK();
+          }
+        }
+        else if (ir_code == rcCmdOk && equalizerMenuEnable) {
+          // KRYTYCZNE: Obsługa OK podczas otwartego equalizera w SDPlayer
+          Serial.println("[SDPlayer] OK w equalizerze - zapisywanie ustawień EQ");
+          saveEqualizerOnSD();
+          equalizerMenuEnable = false;
+          displayActive = false;
+          timeDisplay = false;
+          u8g2.clearBuffer();
+          delay(50);
+          Serial.println("[SDPlayer] Equalizer zapisany, powrót do wyświetlacza");
+        }
+        else if (ir_code == rcCmdSrc) {
+          // SRC - zmiana stylu OLED SDPlayera
+          g_sdPlayerOLED->nextStyle();
+          Serial.println("DEBUG: SDPlayer style changed via SRC");
+        }
+        else if (ir_code == rcCmdBT) {
+          // BT button - ponieważ moduł BT usunięty, używamy jako dodatkowy przycisk zmiany stylu
+          g_sdPlayerOLED->nextStyle();
+          Serial.println("DEBUG: SDPlayer style changed via BT button (BT module removed)");
+        }
+        else if ((ir_code == rcCmdArrowRight || ir_code == rcCmdArrowLeft) && !equalizerMenuEnable) {
+          // Nowa logika double-click: 1 klik = seek, 2 kliki w 2s = prev/next track
+          if (!listedTracks && (sdPlayerOLEDActive || (g_sdPlayerWeb && (g_sdPlayerWeb->isPlaying() || g_sdPlayerWeb->isPaused())))) {
+            const int currentDirection = (ir_code == rcCmdArrowRight) ? 1 : -1;
+            const unsigned long nowMs = millis();
+            const unsigned long doubleClickTimeout = 2000; // 2 sekundy na drugi klik
+            
+            // Sprawdź czy timeout już minął - jeśli tak, zresetuj stan
+            if (waitingForSecondClick && (nowMs - firstClickTime > doubleClickTimeout)) {
+              // Timeout minął - wykonaj seek dla pierwszego kliknięcia i zresetuj
+              performSeekAction(lastClickDirection * 5);
+              waitingForSecondClick = false;
+            }
+            
+            // Sprawdź czy to drugi klik w tym samym kierunku w ciągu timeout
+            if (waitingForSecondClick && 
+                currentDirection == lastClickDirection && 
+                (nowMs - firstClickTime <= doubleClickTimeout)) {
+              
+              // DRUGI KLIK - przejdź na poprzedni/następny utwór
+              waitingForSecondClick = false;
+              
+              // Najpierw sprawdź czy używamy starego systemu (trackFiles[])
+              if (tracksCount > 0 && sdPlayerOLEDActive) {
+                if (currentDirection > 0) {
+                  // NEXT TRACK
+                  currentTrackSelection++;
+                  if (currentTrackSelection >= tracksCount) {
+                    currentTrackSelection = 0; // Zapętlenie
+                  }
+                  Serial.printf("[SDPlayer] Double-click RIGHT -> Następny utwór: indeks %d/%d\n", 
+                              currentTrackSelection + 1, tracksCount);
+                } else {
+                  // PREV TRACK  
+                  currentTrackSelection--;
+                  if (currentTrackSelection < 0) {
+                    currentTrackSelection = tracksCount - 1; // Zapętlenie
+                  }
+                  Serial.printf("[SDPlayer] Double-click LEFT -> Poprzedni utwór: indeks %d/%d\n", 
+                              currentTrackSelection + 1, tracksCount);
+                }
+                
+                // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+                currentMP3Artist = "";
+                currentMP3Title = "";
+                currentMP3Album = "";
+                
+                // Odtwórz nowy plik - trackFiles[] już zawiera pełną ścieżkę względną
+                lastPlayedTrackIndex = currentTrackSelection;
+                String filePath = "/" + trackFiles[currentTrackSelection];
+                Serial.printf("[SDPlayer] Odtwarzanie: %s\n", trackFiles[currentTrackSelection].c_str());
+                audio.connecttoFS(STORAGE, filePath.c_str());
+                
+                // WALIDACJA: Sprawdź Duration (ochrona przed IntegerDivideByZero)
+                // Czekaj aż Duration > 0 lub timeout 2.5s
+                uint32_t duration = 0;
+                for(int i = 0; i < 50 && duration == 0; i++) {
+                  audio.loop();
+                  delay(50);
+                  duration = audio.getAudioFileDuration();
+                }
+                if (duration == 0) {
+                  Serial.println("[SDPlayer] ERROR - Corrupted file (Duration=0)");
+                  audio.stopSong();
+                  sdPlayerPlayingMusic = false;
+                  if (g_sdPlayerWeb) {
+                    g_sdPlayerWeb->setCurrentFile("");
+                    g_sdPlayerWeb->setIsPlaying(false);
+                  }
+                } else {
+                  sdPlayerPlayingMusic = true;
+                  
+                  // Synchronizuj z SDPlayerWebUI dla wyświetlacza
+                  if (g_sdPlayerWeb) {
+                    g_sdPlayerWeb->setCurrentFile(trackFiles[currentTrackSelection]);
+                    g_sdPlayerWeb->setIsPlaying(true);
+                  }
+                }
+              }
+              // Jeśli nie ma trackFiles, użyj WebUI
+              else if (g_sdPlayerWeb) {
+                if (currentDirection > 0) {
+                  g_sdPlayerWeb->next();
+                  Serial.println("[SDPlayer] Double-click RIGHT -> Następny utwór (WebUI)");
+                } else {
+                  g_sdPlayerWeb->prev();
+                  Serial.println("[SDPlayer] Double-click LEFT -> Poprzedni utwór (WebUI)");
+                }
+              }
+              
+            } else {
+              // PIERWSZY KLIK lub zmiana kierunku - rozpocznij nowe oczekiwanie
+              waitingForSecondClick = true;
+              firstClickTime = nowMs;
+              lastClickDirection = currentDirection;
+              
+              Serial.printf("[SDPlayer] Pierwszy klik %s - oczekiwanie na drugi klik w ciągu 2s\n",
+                            currentDirection > 0 ? "RIGHT" : "LEFT");
+            }
+          }
+        }
+        else if (ir_code == rcCmdBack) {
+          // BACK - różne działania w zależności od stanu
+          if (equalizerMenuEnable) {
+            #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+            // ========== EQUALIZER 16-BAND: BACK = WYJŚCIE ==========
+            if (eq16ModeSelectActive) {
+              // Wyjście z wyboru trybu - zamknij menu EQ całkowicie
+              eq16ModeSelectActive = false;
+              equalizerMenuEnable = false;
+              displayActive = false;
+              timeDisplay = false;
+              u8g2.clearBuffer();
+              delay(50);
+              Serial.println("[EQ16] BACK - zamknięcie menu wyboru trybu");
+              return;
+            }
+            else if (eq16Mode) {
+              // Wyjście z edytora 16-band - zapisz i pokaż wybór trybu
+              EQ16_saveToSD();
+              eq16ModeSelectActive = true;  // Wróć do wyboru trybu
+              displayEqualizer();
+              Serial.println("[EQ16] BACK - zapisano i powrót do wyboru trybu");
+              return;
+            }
+            #endif
+            
+            // ========== EQUALIZER 3-BAND: BACK = ZAMKNIJ BEZ ZAPISU ==========
+            // Jeśli equalizer jest aktywny - zamknij bez zapisywania
+            Serial.println("[EQ] BACK - zamknięcie equalizera bez zapisu");
+            equalizerMenuEnable = false;
+            displayActive = false;
+            timeDisplay = false;
+            u8g2.clearBuffer();
+            delay(50);
+            Serial.println("[EQ] Powrót do normalnego wyświetlacza");
+          }
+          else if (listedTracks) {
+            // Jeśli lista utworów jest aktywna - wyjdź z niej
+            Serial.println("[SDPlayer] BACK - wyjście z listy utworów");
+            listedTracks = false;
+            displayActive = false;
+            timeDisplay = false;
+            
+            // Wymuś odświeżenie ekranu SDPlayer
+            u8g2.clearBuffer();
+            delay(50);
+            Serial.println("[SDPlayer] Ekran zostanie odświeżony przez SDPlayerOLED.loop()");
+          } else {
+            // Standardowa obsługa BACK - podwójne kliknięcie wychodzi z SDPlayera
+            static unsigned long lastBackPress = 0;
+            static uint8_t backClickCount = 0;
+            unsigned long currentTime = millis();
+            
+            if (currentTime - lastBackPress > 600) { // 600ms okno
+              backClickCount = 0; // Reset po timeout
+            }
+            
+            backClickCount++;
+            lastBackPress = currentTime;
+            
+            if (backClickCount >= 2) {
+              // Podwójne kliknięcie - wyjście z SDPlayera
+              Serial.println("DEBUG: Double BACK press - exiting SDPlayer to radio");
+              backClickCount = 0; // Reset
+
+              if (sdPlayerSessionStartIndex >= 0 && sdPlayerSessionEndIndex >= 0) {
+                sdPlayerSessionCompleted = true;
+                saveSDPlayerSessionState();
+              }
+              
+              g_sdPlayerOLED->deactivate();
+              sdPlayerOLEDActive = false;
+              sdPlayerPlayingMusic = false;
+              audio.stopSong();
+              
+              // Wyłącz boost dynamiki analizatora
+              eq_analyzer_set_sdplayer_mode(false);
+              
+              // WAŻNE: Wyczyść bufor przed przełączeniem na radio
+              u8g2.clearBuffer();
+            
+              // Przywróć zapisany bank i stację
+              bank_nr = sdPlayerReturnBank;
+              station_nr = sdPlayerReturnStation;
+              Serial.printf("[SDPlayer] Przywrócono pozycję: Bank %d, Stacja %d\n", bank_nr, station_nr);
+              changeStation();
+              displayRadio();
+              u8g2.sendBuffer();
+            } else {
+              // Pojedyncze kliknięcie - STOP
+              g_sdPlayerOLED->onRemoteStop();
+              Serial.println("SD Player: BACK button - STOP (press again quickly to exit)");
+            }
+          }
+        }
+        else if (ir_code == rcCmdKey0) {
+          // Key0 - ma trzy funkcje:
+          // 1. Dodaj "0" jako drugą cyfrę (1→10, 2→20) - obsługiwane w rcInputKey
+          // 2. ENTER dla liczby dwucyfrowej (np. "10", "25")
+          // 3. Podwójne "00" → Wyjście z SDPlayera do radia
+          
+          // Najpierw wywołaj rcInputKey(0) - obsłuży dodanie "0" do bufora jeśli potrzebne
+          rcInputKey(0);
+          
+          // Sprawdź czy to ENTER dla liczby >= 10
+          if (irInputActive && irInputBuffer >= 10 && irInputBuffer <= 100) {
+            // ENTER dla wielocyfrowego wprowadzania - potwierdź liczbę (np. "2" + "5" + "0" = utwór 25)
+            Serial.printf("DEBUG: Key0 ENTER - confirming track: %d\n", irInputBuffer);
+            irRequestedTrackNumber = irInputBuffer;
+            irTrackSelectionRequest = true;
+            
+            // Resetuj system wprowadzania
+            irInputBuffer = 0;
+            irInputActive = false;
+            irInputTimeout = 0;
+            
+            Serial.printf("DEBUG: Track %d selected via Key0 ENTER\n", irRequestedTrackNumber);
+          } else if (!irInputActive || irInputBuffer == 0) {
+            // Podwójne "00" (bez wcześniejszych cyfr) → Wyjście z SDPlayera do radia
+            static unsigned long lastKey0Press = 0;
+            static uint8_t key0ClickCount = 0;
+            unsigned long currentTime = millis();
+            
+            if (currentTime - lastKey0Press > 600) { // 600ms okno
+              key0ClickCount = 0; // Reset po timeout
+            }
+            
+            key0ClickCount++;
+            lastKey0Press = currentTime;
+            
+            if (key0ClickCount >= 2) {
+              // Podwójne "00" - wyjście z SDPlayera
+              Serial.println("DEBUG: Double Key0 press (00) - Exiting SDPlayer to radio");
+              key0ClickCount = 0; // Reset
+
+              if (sdPlayerSessionStartIndex >= 0 && sdPlayerSessionEndIndex >= 0) {
+                sdPlayerSessionCompleted = true;
+                saveSDPlayerSessionState();
+              }
+
+              g_sdPlayerOLED->deactivate();
+              sdPlayerOLEDActive = false;
+              sdPlayerPlayingMusic = false;
+              audio.stopSong();
+              
+              // Wyłącz boost dynamiki analizatora
+              eq_analyzer_set_sdplayer_mode(false);
+            
+              // WAŻNE: Wyczyść bufor przed przełączeniem na radio
+              u8g2.clearBuffer();
+            
+              // Przywróć zapisany bank i stację
+              bank_nr = sdPlayerReturnBank;
+              station_nr = sdPlayerReturnStation;
+              Serial.printf("[SDPlayer] Key00: Przywrócono pozycję: Bank %d, Stacja %d\n", bank_nr, station_nr);
+              changeStation();
+              displayRadio();
+              u8g2.sendBuffer();
+            } else {
+              // Pojedyncze "0" - czekaj na drugie
+              Serial.println("DEBUG: Single Key0 press - press again (00) to exit");
+            }
+          }
+        }
+        else if (ir_code == rcCmdVolumeUp) {
+          g_sdPlayerOLED->onRemoteVolUp();
+        }
+        else if (ir_code == rcCmdVolumeDown) {
+          g_sdPlayerOLED->onRemoteVolDown();
+        }
+        else if (ir_code == rcCmdMute) {
+          // MUTE toggle w trybie SDPlayer (normalna obsługa globalna jest zablokowana przez SDPLAYER ROUTING)
+          static int sdPlayerVolumeBeforeMute = -1;
+
+          volumeMute = !volumeMute;
+          if (volumeMute) {
+            sdPlayerVolumeBeforeMute = g_sdPlayerWeb ? g_sdPlayerWeb->getVolume() : volumeValue;
+            if (g_sdPlayerWeb) {
+              g_sdPlayerWeb->setVolume(0);
+            } else {
+              audio.setVolume(0);
+            }
+            Serial.println("[SDPlayer] MUTE ON");
+          } else {
+            int restoreVolume = (sdPlayerVolumeBeforeMute >= 0) ? sdPlayerVolumeBeforeMute : volumeValue;
+            if (g_sdPlayerWeb) {
+              g_sdPlayerWeb->setVolume(restoreVolume);
+            } else {
+              audio.setVolume(restoreVolume);
+            }
+            sdPlayerVolumeBeforeMute = -1;
+            Serial.printf("[SDPlayer] MUTE OFF (vol=%d)\n", restoreVolume);
+          }
+
+          wsVolumeChange();
+        }
+        else if (ir_code == rcCmdAud) {
+          // Przycisk AUD - otwórz korektor EQ
+          displayEqualizer();
+          Serial.println("[SDPlayer] Equalizer opened (AUD button)");
+        }
+        else if (ir_code == rcCmdPower || ir_code == rcCmdRed) {
+          // POWER OFF / RED - pozwól przejść do handleRemote()
+          Serial.printf("[SDPlayer] Power OFF button detected (0x%04X) - passing to handler\n", ir_code);
+          // NIE BLOKUJ - pozwól mu przejść do handleRemote() gdzie jest pełna obsługa
+        }
+        else if (ir_code == rcCmdBack) {
+          // BACK button - pozwól przejść do handleRemote() gdzie jest obsługa goUp()
+          Serial.printf("[SDPlayer] BACK button detected (0x%04X) - for folder UP navigation\n", ir_code);
+          // NIE BLOKUJ - będzie obsłużony w handleRemote()
+        }
+        else if (ir_code == rcCmdKey9) {
+          // Key9 - pozostaw bez zmian, obsłuży poniższy kod
+          // NIE BLOKUJ Key9 - pozwól mu przejść dalej
+        }
+        else if (equalizerMenuEnable && (ir_code == rcCmdArrowUp || ir_code == rcCmdArrowDown || 
+                                          ir_code == rcCmdArrowLeft || ir_code == rcCmdArrowRight)) {
+          // Gdy equalizer jest aktywny, przepuść strzałki do normalnej obsługi equalizera
+          Serial.printf("DEBUG: SDPlayer - equalizer active, passing arrow key 0x%04X to EQ handler\n", ir_code);
+        }
+        else {
+          // WSZYSTKIE inne przyciski są ignorowane gdy SDPlayer aktywny
+          Serial.printf("DEBUG: SDPlayer active - blocking IR code 0x%04X\n", ir_code);
+        }
+        
+        // Funkcja sprawdzająca czy kod IR to klawisz numeryczny (0-9)
+        bool isNumericKey = (ir_code == rcCmdKey0 || ir_code == rcCmdKey1 || ir_code == rcCmdKey2 || 
+                            ir_code == rcCmdKey3 || ir_code == rcCmdKey4 || ir_code == rcCmdKey5 || 
+                            ir_code == rcCmdKey6 || ir_code == rcCmdKey7 || ir_code == rcCmdKey8 || 
+                            ir_code == rcCmdKey9);
+        
+        // Funkcja sprawdzająca czy to Power OFF
+        bool isPowerOffKey = (ir_code == rcCmdPower || ir_code == rcCmdRed);
+        
+        // Funkcja sprawdzająca czy to BACK (folder UP)
+        bool isBackKey = (ir_code == rcCmdBack);
+        
+        // Zablokuj WSZYSTKIE komendy oprócz klawiszy numerycznych (0-9), strzałek equalizera, Power OFF i BACK
+        if (!isNumericKey && !isPowerOffKey && !isBackKey &&
+            !(equalizerMenuEnable && (ir_code == rcCmdArrowUp || ir_code == rcCmdArrowDown || 
+                                      ir_code == rcCmdArrowLeft || ir_code == rcCmdArrowRight))) {
+          ir_code = 0;
+          bit_count = 0;
+          attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
+          #ifdef IR_LED
+          digitalWrite(IR_LED, LOW); delay(30);
+          #endif
+          return; // WAŻNE: Przerwij dalsze przetwarzanie, inaczej ir_code==0 aktywuje combo 000!
+        }
+      }
+      // ===== KONIEC SDPLAYER ROUTING =====
+      
+      // 2. Przycisk AUD - podwójne kliknięcie aktywuje SDPlayer, pojedyncze otwiera equalizer
+      if (ir_code == rcCmdAud) {
+        unsigned long nowMs = millis();
+        const unsigned long doubleClickTimeout = 600; // 600ms na drugie naciśnięcie
+        
+        if (waitingForSecondAudClick && (nowMs - firstAudClickTime <= doubleClickTimeout)) {
+          // Drugie naciśnięcie w czasie - AKTYWUJ SDPLAYER
+          waitingForSecondAudClick = false;
+          Serial.println("[AUD] PODWÓJNE KLIKNIĘCIE - Aktywacja SDPlayer");
+          
+          // Zamknij equalizer jeśli był otwarty
+          if (equalizerMenuEnable) {
+            equalizerMenuEnable = false;
+          }
+          
+          // KRYTYCZNE: Wyzeruj flagi rcInput
+          rcInputDigitsMenuEnable = false;
+          rcInputDigit1 = 0xFF;
+          rcInputDigit2 = 0xFF;
+          
+          if (g_sdPlayerOLED) {
+            // Zapamiętaj aktualny bank i stację przed aktywacją
+            sdPlayerReturnBank = bank_nr;
+            sdPlayerReturnStation = station_nr;
+            Serial.printf("[SDPlayer] IR: Zapisano pozycję powrotu: Bank %d, Stacja %d\n", sdPlayerReturnBank, sdPlayerReturnStation);
+            
+            g_sdPlayerOLED->activate();
+            sdPlayerOLEDActive = true;
+            
+            // Włącz 3x większą dynamikę analizatora dla SDPlayera
+            eq_analyzer_set_sdplayer_mode(true);
+            
+            // Pokaż splash screen "SD PLAYER"
+            g_sdPlayerOLED->showSplash();
+            delay(1000);  // Pokaż przez 1 sekundę
+            
+            // SYNCHRONIZACJA: Jeśli coś gra, zsynchronizuj WebUI z aktualnym stanem
+            if (g_sdPlayerWeb && sdPlayerPlayingMusic) {
+              g_sdPlayerWeb->setIsPlaying(true);
+              
+              if (currentTrackSelection >= 0 && currentTrackSelection < tracksCount) {
+                String currentFileName = trackFiles[currentTrackSelection];
+                g_sdPlayerWeb->setCurrentFile(currentFileName);
+                Serial.printf("[SDPlayer] IR: Synchronized WebUI with current track: %s\n", currentFileName.c_str());
+              }
+            }
+            
+            Serial.println("[SDPlayer] Aktywny - użyj ↑/↓ aby zobaczyć listę utworów");
+          }
+        } else {
+          // Pierwsze naciśnięcie LUB timeout minął - OTWÓRZ EQUALIZER
+          waitingForSecondAudClick = true;
+          firstAudClickTime = nowMs;
+          displayEqualizer();
+          Serial.println("[AUD] Equalizer otwarty (czekam na ewentualne drugie kliknięcie dla SDPlayer)");
+        }
+        
+        ir_code = 0;
+        bit_count = 0;
+        attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
+        return;
+      }
+      
+      // 4. Toggle Analyzer (np. przycisk YELLOW na pilocie)
+      if (ir_code == rcCmdYellow) {
+        analyzerEnabled = !analyzerEnabled;
+        eq_analyzer_set_enabled(analyzerEnabled);
+        Serial.printf("DEBUG: Analyzer %s\n", analyzerEnabled ? "ENABLED" : "DISABLED");
+        displayRadio();
+        ir_code = 0;
+        bit_count = 0;
+        attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
+        return;
+      }
+      
+      // 5. Toggle Recording - PRZENIESIONE NA PRZYCISK DIRECT (0xB90F)
+      // Przycisk BLUE (0xB994) nie jest używany na tym pilocie
+      /*
+      if (ir_code == rcCmdBlue) {
+        if (g_sdRecorder) {
+          // Toggle nagrywania - START/STOP
+          g_sdRecorder->toggleRecording(stationName);
+          
+          // Wyświetl status
+          if (g_sdRecorder->isRecording()) {
+            Serial.printf("[SDRecorder] Recording STARTED: %s\n", g_sdRecorder->getCurrentFileName().c_str());
+            // Opcjonalnie: pokaż komunikat na OLED
+          } else {
+            Serial.printf("[SDRecorder] Recording STOPPED. Size: %s\n", 
+                          g_sdRecorder->getFileSizeString().c_str());
+          }
+          
+          displayRadio();
+        }
+        ir_code = 0;
+        bit_count = 0;
+        attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
+        return;
+      }
+      */
+      
+      // ============== KONIEC OBSŁUGI MODUŁÓW - kontynuacja normalnej obsługi radia ==============
+      lastIrCode = ir_code; // Zapamiętujemy ostatni kod (dla combo)
+      
+      if (ir_code == rcCmdVolumeUp)  { volumeUp(); }         // Przycisk głośniej
+      else if (ir_code == rcCmdVolumeDown) { volumeDown(); } // Przycisk ciszej
+      else if (ir_code == rcCmdArrowRight) // strzałka w prawo - nastepna stacja, bank lub nastawy equalizera
+      {  
+        if (bankMenuEnable == true)
+        {
+          bank_nr++;
+          if (bank_nr > bank_nr_max) 
+          {
+            bank_nr = 1;
+          }
+        bankMenuDisplay();
+        }
+        else if (equalizerMenuEnable == true)
+        {
+          #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+          // ========== EQUALIZER 16-BAND: WYBÓR TRYBU ==========
+          if (eq16ModeSelectActive) {
+            eq16Mode = !eq16Mode;  // Przełącz między 3-band (0) a 16-band (1)
+            displayEqualizer();
+            return;
+          }
+          // ========== EQUALIZER 16-BAND: REGULACJA PASMA ==========
+          else if (eq16Mode) {
+            // Zwiększ poziom wybranego pasma (+1dB)
+            int8_t gain = APMS_EQ16::getBand(eq16SelectedBand);
+            if (gain < 16) {
+              APMS_EQ16::setBand(eq16SelectedBand, gain + 1);
+              APMS_EQ16::applyToAudio();  // Zastosuj do audio
+              displayEqualizer();
+            }
+            return;
+          }
+          #endif
+          
+          // ========== EQUALIZER 3-BAND (DOMYŚLNY) ==========
+          if (toneSelect == 1) {toneHiValue++;}
+          if (toneSelect == 2) {toneMidValue++;}
+          if (toneSelect == 3) {toneLowValue++;}
+          
+          if (toneHiValue > 6) {toneHiValue = 6;}
+          if (toneMidValue > 6) {toneMidValue = 6;}
+          if (toneLowValue > 6) {toneLowValue = 6;}
+          
+          audio.setTone(toneLowValue, toneMidValue, toneHiValue);  // Aplikuj zmiany natychmiast
+          displayEqualizer();
+        }     
+        else if (listedStations == true) // Szybkie przewijanie o 5 stacji
+        {
+          timeDisplay = false;
+          displayActive = true;
+          displayStartTime = millis();    
+          station_nr = currentSelection + 1;
+
+          station_nr = station_nr + 5;
+          for (int i = 0; i < 5; i++) {scrollDown();}
+    
+          if (station_nr > stationsCount) {station_nr = station_nr - stationsCount; } //Zbaezpiecznie aby przewijac sie tylko po stacjach w liczbie jaka jest w stationCount
+          
+          displayStations();
+        }
+        else
+        {
+          station_nr++;
+          //if (station_nr > stationsCount) { station_nr = stationsCount; }
+          if (station_nr > stationsCount) { station_nr = 1; } // Przwijanie listy stacji w pętli po osiągnieciu ostatniej stacji banku przewijamy do pierwszej.
+          changeStation();
+          displayRadio();
+          u8g2.sendBuffer();
+        }
+      }
+      else if (ir_code == rcCmdArrowLeft) // strzałka w lewo - poprzednia stacja, bank lub nastawy equalizera
+      {  
+        if (bankMenuEnable == true)
+        {
+          bank_nr--;
+          if (bank_nr < 1) 
+          {
+            bank_nr = bank_nr_max;
+          }
+        bankMenuDisplay();  
+        }
+        else if (equalizerMenuEnable == true)
+        {
+          #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+          // ========== EQUALIZER 16-BAND: WYBÓR TRYBU ==========
+          if (eq16ModeSelectActive) {
+            eq16Mode = !eq16Mode;  // Przełącz między 3-band (0) a 16-band (1)
+            displayEqualizer();
+            return;
+          }
+          // ========== EQUALIZER 16-BAND: REGULACJA PASMA ==========
+          else if (eq16Mode) {
+            // Zmniejsz poziom wybranego pasma (-1dB)
+            int8_t gain = APMS_EQ16::getBand(eq16SelectedBand);
+            if (gain > -16) {
+              APMS_EQ16::setBand(eq16SelectedBand, gain - 1);
+              APMS_EQ16::applyToAudio();  // Zastosuj do audio
+              displayEqualizer();
+            }
+            return;
+          }
+          #endif
+          
+          // ========== EQUALIZER 3-BAND (DOMYŚLNY) ==========
+          if (toneSelect == 1) {toneHiValue--;}
+          if (toneSelect == 2) {toneMidValue--;}
+          if (toneSelect == 3) {toneLowValue--;}
+          
+          if (toneHiValue < -40) {toneHiValue = -40;}
+          if (toneMidValue < -40) {toneMidValue = -40;}
+          if (toneLowValue < -40) {toneLowValue = -40;}
+          
+          audio.setTone(toneLowValue, toneMidValue, toneHiValue);  // Aplikuj zmiany natychmiast
+          displayEqualizer();
+        }     
+        else if (listedStations == true)
+        {
+          timeDisplay = false;
+          displayActive = true;
+          displayStartTime = millis();    
+          station_nr = currentSelection + 1;
+
+          station_nr = station_nr - 5;
+          
+          for (int i = 0; i < 5; i++) {scrollUp();}
+      
+          //Zbaezpiecznie aby przewijac sie tylko po stacjach w liczbie jaka jest w stationCount
+          if (station_nr > stationsCount) { station_nr = (stationsCount - (255 - station_nr)) - 1 ;} 
+          
+          // Jesli jestesmy na stacji nr 5 to aby uniknąc station_nr = 0 przewijamy do ostatniej
+          if (station_nr == 0) {station_nr = stationsCount;} 
+
+          displayStations();
+        }      
+        else
+        {        
+          station_nr--;
+          //if (station_nr < 1) { station_nr = 1; }
+          if (station_nr < 1) { station_nr = stationsCount; } // Przwijanie listy stacji w pętli po osiągnieciu ostatniej stacji banku przewijamy do pierwszej.
+          changeStation();
+          displayRadio();
+          u8g2.sendBuffer();
+        }
+      }
+      else if ((ir_code == rcCmdArrowUp) && (volumeSet == false) && (equalizerMenuEnable == true))
+      {
+        #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+        // ========== EQUALIZER 16-BAND: OK = POTWIERDZ WYBÓR TRYBU ==========
+        if (eq16ModeSelectActive) {
+          eq16ModeSelectActive = false;  // Zatwierdź wybór i wejdź do edytor
+          displayEqualizer();
+          return;
+        }
+        // ========== EQUALIZER 16-BAND: UP = POPRZEDNIE PASMO ==========
+        else if (eq16Mode) {
+          if (eq16SelectedBand > 0) {
+            eq16SelectedBand--;
+          } else {
+            eq16SelectedBand = 15;  // Wrap around do końca
+          }
+          displayEqualizer();
+          return;
+        }
+        #endif
+        
+        // ========== EQUALIZER 3-BAND: UP = POPRZEDNI PARAMETR ==========
+        toneSelect--;
+        if (toneSelect < 1){toneSelect = 1;}
+        displayEqualizer();
+      }
+      else if ((ir_code == rcCmdArrowUp) && (equalizerMenuEnable == false))// Przycisk w góre
+      {  
+        if ((volumeSet == true) && (volumeBufferValue != volumeValue))
+        {
+          if (f_saveVolumeStationAlways) {saveVolumeOnSD();}
+          volumeSet = false;
+        }
+        
+        timeDisplay = false;
+        displayActive = true;
+        displayStartTime = millis();    
+        station_nr = currentSelection + 1;
+
+        if (listedStations == true) {station_nr--; scrollUp();} //station_nr-- tylko jesli już wyswietlany liste stacji;
+        else
+        {        
+          currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
+          
+          if (currentSelection >= 0)
+          {
+            if (currentSelection < firstVisibleLine) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
+            {
+              firstVisibleLine = currentSelection;
+            }
+          } 
+          else 
+          {  // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości
+            if (currentSelection = maxSelection())
+            {
+            firstVisibleLine = currentSelection - maxVisibleLines + 1;  // Ustaw pierwszą widoczną linię na najwyższą
+            }
+          }   
+        }
+        
+        if (station_nr < 1) { station_nr = stationsCount; } // jesli dojdziemy do początku listy stacji to przewijamy na koniec
+        
+        
+       
+       
+      displayStations();
+      }
+      else if ((ir_code == rcCmdArrowDown) && (volumeSet == false) && (equalizerMenuEnable == true))
+      {
+        #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+        // ========== EQUALIZER 16-BAND: DOWN = NASTĘPNE PASMO ==========
+        if (eq16ModeSelectActive) {
+          eq16ModeSelectActive = false;  //  Zatwierdź wybór i wejdź do edytora
+          displayEqualizer();
+          return;
+        }
+        else if (eq16Mode) {
+          if (eq16SelectedBand < 15) {
+            eq16SelectedBand++;
+          } else {
+            eq16SelectedBand = 0;  // Wrap around do początku
+          }
+          displayEqualizer();
+          return;
+        }
+        #endif
+        
+        // ========== EQUALIZER 3-BAND: DOWN = NASTĘPNY PARAMETR ==========
+        toneSelect++;
+        if (toneSelect > 3){toneSelect = 3;}
+        displayEqualizer();
+      }
+      else if ((ir_code == rcCmdArrowDown) && (equalizerMenuEnable == false)) // Przycisk w dół
+      {  
+        if ((volumeSet == true) && (volumeBufferValue != volumeValue))
+        {
+          if (f_saveVolumeStationAlways) {saveVolumeOnSD();}
+          volumeSet = false;
+        }
+        
+        timeDisplay = false;
+        displayActive = true;
+        displayStartTime = millis();     
+        station_nr = currentSelection + 1;
+        
+        //station_nr++;
+        if (listedStations == true) {station_nr++; scrollDown(); } //station_nr++ tylko jesli już wyswietlany liste stacji;
+        else
+        {        
+          currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
+
+          if (currentSelection >= 0)
+          {
+            if (currentSelection < firstVisibleLine) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
+            {
+              firstVisibleLine = currentSelection;
+            }
+          } 
+          else 
+          {  // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości
+            if (currentSelection = maxSelection())
+            {
+            firstVisibleLine = currentSelection - maxVisibleLines + 1;  // Ustaw pierwszą widoczną linię na najwyższą
+            }
+          }
+             
+        }
+        
+        if (station_nr > stationsCount) 
+	      {
+          station_nr = 1;//stationsCount;
+        }
+        
+        //Serial.println(station_nr);
+
+         
+        displayStations();
+      }    
+      else if (ir_code == rcCmdOk)
+      {
+        if (bankMenuEnable == true)
+        {
+          station_nr = 1;
+          fetchStationsFromServer(); // Ładujemy stacje z karty lub serwera 
+          bankMenuEnable = false;
+        }  
+        if (equalizerMenuEnable == true) { saveEqualizerOnSD();}    // zapis ustawien equalizera
+        //if (volumeSet == true) { saveVolumeOnSD();}                 // zapis ustawien głośnosci po nacisnięciu OK, wyłaczony aby można było przełączyć stacje na www bez czekania
+        //if ((equalizerMenuEnable == false) && (volumeSet == false)) // jesli nie zapisywaliśmy equlizer i glonosci to wywolujemy ponizsze funkcje
+        if ((equalizerMenuEnable == false)) // jesli nie zapisywaliśmy equlizer 
+        {
+          if ((!urlPlaying) || (listedStations)) {changeStation();}
+          if (rcInputDigitsMenuEnable) {changeStation();}
+          else if (urlPlaying) {webUrlStationPlay();}
+
+          clearFlags();                                             // Czyscimy wszystkie flagi przebywania w różnych menu
+          displayRadio();
+          u8g2.sendBuffer();
+        }
+        equalizerMenuEnable = false; // Kasujemy flage ustawiania equalizera
+        volumeSet = false; // Kasujemy flage ustawiania głośnosci
+      } 
+      else if (ir_code == rcCmdKey0) {
+        #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+        eq16Mode = !eq16Mode; // Przełącz 3-band <-> 16-band
+        displayEqualizer();
+        #else
+        rcInputKey(0);
+        #endif
+      }
+      else if (ir_code == rcCmdKey1) {rcInputKey(1);}     
+      else if (ir_code == rcCmdKey2) {rcInputKey(2);}     
+      else if (ir_code == rcCmdKey3) {rcInputKey(3);}     
+      else if (ir_code == rcCmdKey4) {rcInputKey(4);}     
+      else if (ir_code == rcCmdKey5) {rcInputKey(5);}     
+      else if (ir_code == rcCmdKey6) {rcInputKey(6);}     
+      else if (ir_code == rcCmdKey7) {rcInputKey(7);}     
+      else if (ir_code == rcCmdKey8) {rcInputKey(8);}     
+      else if (ir_code == rcCmdKey9) {rcInputKey(9);}
+      else if (ir_code == rcCmdBack) 
+      {   
+        // Jeśli nagrywanie radia aktywne - zatrzymaj przed wyjściem
+        if (g_sdRecorder && g_sdRecorder->isRecording()) {
+          g_sdRecorder->stopRecording();
+          Serial.printf("[SDRecorder] Recording STOPPED via BACK button. Size: %s\n", 
+                        g_sdRecorder->getFileSizeString().c_str());
+        }
+        
+        //f_simpleMode3 = !f_simpleMode3;
+        displayDimmer(0);
+        clearFlags();   // Zerujemy wszystkie flagi
+        displayRadio(); // Ładujemy erkran radia
+        u8g2.sendBuffer(); // Wysyłamy bufor na wyswietlacz
+        currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
+      }
+      else if (ir_code == rcCmdMute) 
+      {
+        volumeMute = !volumeMute;
+        if (volumeMute == true)
+        {
+          audio.setVolume(0);   
+        }
+        else if (volumeMute == false)
+        {
+          audio.setVolume(volumeValue);   
+        }
+        // Dla stylów 5, 6, 10 nie wywoływuj displayRadio() - przekreślony głośnik rysuje się w vuMeterMode
+        if (displayMode != 5 && displayMode != 6 && displayMode != 10)
+        {
+          displayRadio();
+        }
+        //wsVolumeChange(volumeValue);
+        wsVolumeChange();
+      }
+      else if (ir_code == rcCmdDirect) // Przycisk Direct -> Nagrywanie radia (REC), Menu Bank - update GitHub, Menu Equalizer - reset wartosci, Radio Display - dimmer
+      {
+        if ((bankMenuEnable == true) && (equalizerMenuEnable == false))// flage można zmienic tylko bedąc w menu wyboru banku
+        { 
+          bankNetworkUpdate = !bankNetworkUpdate; // zmiana flagi czy aktualizujemy bank z sieci czy karty SD
+          bankMenuDisplay(); 
+        }
+        if ((bankMenuEnable == false) && (equalizerMenuEnable == true))
+        {
+          toneHiValue = 0;
+          toneMidValue = 0;
+          toneLowValue = 0;    
+          displayEqualizer();
+        }
+        if ((bankMenuEnable == false) && (equalizerMenuEnable == false) && (volumeSet == false))
+        { 
+          // PRIORTYTET: Nagrywanie radia (Toggle START/STOP)
+          if (g_sdRecorder) {
+            g_sdRecorder->toggleRecording(stationName);
+            
+            if (g_sdRecorder->isRecording()) {
+              Serial.printf("[SDRecorder] Recording STARTED: %s\n", g_sdRecorder->getCurrentFileName().c_str());
+            } else {
+              Serial.printf("[SDRecorder] Recording STOPPED. Size: %s, Time: %s\n", 
+                            g_sdRecorder->getFileSizeString().c_str(),
+                            g_sdRecorder->getRecordTimeString().c_str());
+            }
+            displayRadio();
+          }
+          else if (displayMode == 4) // Jesli jestesmy w display Mode 4 czyli duzy VU wsazowkowy to mozna właczyc buffor audio print.
+          {
+            debugAudioBuffor=!debugAudioBuffor;
+          }
+          else
+          {
+            displayDimmer(!displayDimmerActive); // Dimmer OLED
+            Serial.println("Właczono display Dimmer rcCmdDirect");
+          }
+        }
+      }      
+      else if (ir_code == rcCmdSrc) 
+      {
+        displayMode++;
+        
+        // Pominaj nieistniejące style: 5 (usunięty), 7, 9 
+        if (displayMode == 5 || displayMode == 7 || displayMode == 9) {
+          displayMode++; // Przeskocz na następny
+        }
+        
+        // Jeśli doszliśmy do 11+, wróć do 0
+        if (displayMode >= 11) {
+          displayMode = 0;
+        }
+        
+        // Automatyczne pomijanie wyłączonych stylów
+        // Styl 6 - jeśli wyłączony, pomiń
+        if (displayMode == 6 && !displayMode6Enabled) {
+          displayMode++;  // Przejdź do 7 -> zostanie pomięty -> 8
+          if (displayMode == 7) displayMode = 8; // Direct skip
+        }
+        
+        // Styl 8 - jeśli wyłączony, pomiń 
+        if (displayMode == 8 && !displayMode8Enabled) {
+          displayMode++; // Przejdź do 9 -> zostanie pomięte -> 10
+          if (displayMode == 9) displayMode = 10; // Direct skip
+        }
+        
+        // Styl 10 - jeśli wyłączony, pomiń i wróć do 0
+        if (displayMode == 10 && !displayMode10Enabled) {
+          displayMode = 0;
+        }
+        
+        displayRadio();
+        clearFlags();
+        ActionNeedUpdateTime = true;
+      }
+      else if (ir_code == rcCmdRed)   {powerOff();}
+      else if (ir_code == rcCmdPower) {
+        // PUNKT 1: Power OFF działa również w trybie SD Player
+        if (sdPlayerOLEDActive && g_sdPlayerOLED) {
+          Serial.println("SD Player: Power OFF from IR remote");
+          g_sdPlayerOLED->deactivate();
+          sdPlayerOLEDActive = false;
+        }
+        powerOff();
+      }
+      else if (ir_code == rcCmdGreen) if (listedStations) {voiceTime();} else {sleepTimerSet();}   
+      else if (ir_code == rcCmdBankMinus) 
+      {
+        if (bankMenuEnable == true) 
+        { 
+          bank_nr--; 
+          if (bank_nr < 1) {bank_nr = bank_nr_max;}
+        }       
+        bankMenuDisplay();
+      }
+      else if (ir_code == rcCmdBankPlus) 
+      {
+        
+        if (bankMenuEnable == true)
+        {
+          bank_nr++;
+          if (bank_nr > bank_nr_max) {bank_nr = 1;}
+        }       
+        bankMenuDisplay();       
+      }
+     
+      else if (ir_code == rcCmdAud) {
+        #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+          // Włącz ekran wyboru trybu equalizera (3-band lub 16-band)
+          eq16ModeSelectActive = true;
+        #endif
+        displayEqualizer();
+      }
+      else { Serial.println("Inny przycisk"); }
+    }
+    else
+    {
+      Serial.println("Błąd - kod pilota NEC jest niepoprawny!");
+      Serial.print("debug IR -> puls 9ms:");
+      Serial.print(pulse_duration_9ms);
+      Serial.print("  4.5ms:");
+      Serial.print(pulse_duration_4_5ms);
+      Serial.print("  1690us:");
+      Serial.print(pulse_duration_1690us);
+      Serial.print("  560us:");
+      Serial.println(pulse_duration_560us);    
+    }
+    ir_code = 0;
+    bit_count = 0;
+    attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
+    
+    
+    // ---- Symulacja aktywnosci LED IR ----
+    #ifdef IR_LED
+    digitalWrite(IR_LED, LOW); delay(30); 
+    #endif
+    
+  }
+
+}
+
+
+
+
 //####################################################################################### SETUP ####################################################################################### //
 
 void setup() 
@@ -8675,12 +10715,47 @@ void setup()
 
   // Inicjalizuj komunikację szeregową (Serial)
   Serial.begin(115200);
+  delay(600);
+  //while (!Serial) {delay(10);}
   
-  // Resetowanie sleep timer na początku - upewniamy się że jest wyłączony
-  f_sleepTimerOn = false;
-  sleepTimerValueSet = 0;
-  sleepTimerValueCounter = 0;
+  // ========== OPTYMALIZACJA CPU DLA STRUMIENIOWANIA ==========
+  // Upewnij się że CPU działa na maksymalnej częstotliwości
+  setCpuFrequencyMhz(240);  // ESP32S3 @ 240MHz - max wydajność
+  Serial.print("[CPU] Frequency set to: ");
+  Serial.print(getCpuFrequencyMhz());
+  Serial.println(" MHz");
+  // ===========================================================
+  
+  // DIAGNOSTYKA RESTART: Sprawdź powód restartu
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  Serial.println("========================================");
+  Serial.print("[RESTART REASON] ");
+  switch (resetReason) {
+    case ESP_RST_POWERON:   Serial.println("Power-on reset"); break;
+    case ESP_RST_EXT:       Serial.println("External reset"); break;
+    case ESP_RST_SW:        Serial.println("Software reset"); break;
+    case ESP_RST_PANIC:     Serial.println("PANIC RESET - Exception/Panic!"); break;
+    case ESP_RST_INT_WDT:   Serial.println("WATCHDOG RESET - Interrupt watchdog!"); break;
+    case ESP_RST_TASK_WDT:  Serial.println("WATCHDOG RESET - Task watchdog!"); break;
+    case ESP_RST_WDT:       Serial.println("WATCHDOG RESET - Other watchdog!"); break;
+    case ESP_RST_DEEPSLEEP: Serial.println("Deep sleep reset"); break;
+    case ESP_RST_BROWNOUT:  Serial.println("BROWNOUT RESET - Power issue!"); break;
+    case ESP_RST_SDIO:      Serial.println("SDIO reset"); break;
+    default:                Serial.printf("Unknown reset (code: %d)", resetReason); break;
+  }
+  Serial.printf("[MEMORY] Free Heap: %u bytes, Min Free: %u bytes\n", 
+                ESP.getFreeHeap(), ESP.getMinFreeHeap());
+  Serial.println("========================================");
     
+  /*
+  Serial.println("=== START RS232 ===");
+  for (int i=0; i<5; i++) 
+  {
+    Serial.printf("Line %d\n", i);
+    delay(100);
+  }
+  */
+
   uint64_t chipid = ESP.getEfuseMac();
   Serial.println("");
   Serial.println("------------------ START of Evo Web Radio --------------------");
@@ -8691,12 +10766,6 @@ void setup()
   Serial.println("- Code source: https://github.com/dzikakuna/ESP32_radio_evo3 -");
   Serial.println("--------------------------------------------------------------");
   
-  Audio::audio_info_callback = my_audio_info; // Przypisanie własnej funkcji callback do obsługi zdarzeń i informacji audio
-  audio.setVolume(0);
-  
-  // Optymalizacja prędkości połączeń audio
-  audio.setConnectionTimeout(5, 6); // connection timeout 5s, data timeout 6s (szybszy start)
-
   // Inicjalizacja SPI z nowymi pinami dla czytnika kart SD
   customSPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);  // SCLK = 45, MISO = 21, MOSI = 48, CS = 47
 
@@ -8716,6 +10785,7 @@ void setup()
   }
 
   wifiManager.setHostname(hostname);
+  WiFi.setSleep(false);
 
   EEPROM.begin(128);
 
@@ -8742,7 +10812,7 @@ void setup()
   // --------LED STANDBY dla stanu HIGH w trybie Power ON ----------------
   pinMode(STANDBY_LED, OUTPUT);
   //digitalWrite(STANDBY_LED, HIGH); // Dla LED właczonego w trybie Power ON
-  digitalWrite(STANDBY_LED, LOW); // Dla LED wylaczonego w trybie Power ON
+  digitalWrite(STANDBY_LED, LOW); // Dla LED wylaczonego w trybie Power ON, włączonego w trybie Standby
 
   // ----------------- LED CS karty SD - klon (jesli włączony) -----------------
   #ifdef SD_LED
@@ -8758,95 +10828,163 @@ void setup()
 
 
   // ----------------- PRZETWORNIK ADC KLAWIATURA - Konfiguracja -----------------
-  analogReadResolution(12);                 // Ustawienie rozdzielczości na 12 bits (zakres 0-4095)
+  analogReadResolution(12);                 // Ustawienie rozdzielczości na 11 bits (zakres 0-4095)
   analogSetAttenuation(ADC_11db);           // Wzmocnienie ADC (0dB dla zakresu 0-3.3V)
 
   
   audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);  // Konfiguruj pinout dla interfejsu I2S audio
+  Audio::audio_info_callback = my_audio_info; // Przypisanie własnej funkcji callback do obsługi zdarzeń i informacji audio
+  
+  // ========== 16-BAND GRAPHIC EQUALIZER INITIALIZATION (PART 1) ==========
+  #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+    APMS_EQ16::init(&audio);                    // Inicjalizuj equalizer z referencją do audio
+    APMS_EQ16::setFeatureEnabled(true);         // Włącz funkcję equalizera w menu
+    APMS_EQ16::setEnabled(true);                // Włącz przetwarzanie audio przez EQ
+    Serial.println("[EQ16] 16-band Graphic Equalizer initialized (waiting for storage)");
+  #else
+    Serial.println("[EQ16] 16-band EQ disabled (ENABLE_EQ16=0)");
+  #endif
+  // NOTE: EQ16_loadFromSD() will be called AFTER storage initialization
+  // ==============================================================
+
+  
+  // ========== MAKSYMALNE OPTYMALIZACJE DLA FLAC STREAMING ==========
+  // 1. AUDIO TASK NA DEDYKOWANYM CORE 1 (separacja od WiFi stack)
+  //    WiFi działa na Core 0, Arduino loop() na Core 1
+  //    Audio task przeniesiony na Core 1 = ZERO konkurencji z WiFi
+  audio.setAudioTaskCore(1);  // Core 1: dedykowany dla audio i dekodowania FLAC
+  
+  // 2. Zwiększone timeouty dla stabilności
+  audio.setConnectionTimeout(5000, 8000);      // HTTP: 5s, HTTPS: 8s
+  
+  // UWAGA: WiFi.setSleep(false) już ustawione - krytyczne!
+  // UWAGA: WiFi.setTxPower(19.5dBm) - maksymalna moc
+  // UWAGA: PSRAM 640KB buffer - automatycznie używany
+  // UWAGA: TCP window 64KB + send buffer 64KB w platformio.ini
+  // UWAGA: CPU @ 240MHz - wymuszone w setup()
+  // =================================================================
+  
+  audio.setVolume(0);
   
   // Inicjalizuj interfejs SPI wyświetlacza
   SPI.begin(SPI_SCK_OLED, SPI_MISO_OLED, SPI_MOSI_OLED);
   SPI.setFrequency(2000000);
 
 
-  // Inicjalizuj wyświetlacz i odczekaj na włączenie
+  // Inicjalizuj wyświetlacz i odczekaj 250 milisekund na włączenie
   u8g2.begin();
-  delay(10); // Minimalny delay dla stabilizacji wyświetlacza
-  
-  // ----------------- KARTA SD / PAMIEC SPIFFS - Inicjalizacja -----------------
-  if (!STORAGE_BEGIN())
-  {
-    Serial.println("Błąd inicjalizacji karty SD!"); // Informacja o problemach lub braku karty SD
-    noSDcard = true;                                // Flaga braku karty SD
-  }
-  else
-  {
-    Serial.println("Karta SD zainicjalizowana pomyślnie.");
-    noSDcard = false;
-    delay(50);  // Daj SD czas na stabilizację
-  }
+  delay(250);
 
-  // Odczyt konfiguracji
-  readConfig();
-  // Wczytaj osobny config wyglądu analizatora (/analyzer)
-  // Odczytaj plik w main.cpp (gdzie SD jest zainicjalizowane) i przekaż do parsera
-  {
-    Serial.println("\n*** LOADING ANALYZER CONFIGURATION ***");
-    Serial.println("DEBUG: Odczyt analyzer.cfg w main.cpp...");
-    File cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
-    if (cfgFile) {
-      String content = cfgFile.readString();
-      cfgFile.close();
-      Serial.printf("DEBUG: Odczytano %u bajtów z analyzer.cfg\n", content.length());
-      analyzerStyleLoadFromString(content);
-    } else {
-      Serial.println("DEBUG: analyzer.cfg nie istnieje lub błąd otwarcia - używam domyślnych");
-      analyzerStyleLoad();  // Użyj domyślnych wartości
+  // ----------------- KARTA SD / PAMIEC SPIFFS/LittleFS - Inicjalizacja -----------------
+  // Inicjalizacja STORAGE
+  #ifdef AUTOSTORAGE
+    if (!initStorage()) 
+    {
+      while (1);
     }
-    Serial.println("*** ANALYZER CONFIGURATION LOAD FINISHED ***\n");
-  }
-  eq_analyzer_init();
-  eq_analyzer_set_enabled(eqAnalyzerOn);   // Set initial state from config
-if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku config.txt to go tworzymy
+  #else
+    // ----------------- KARTA SD / PAMIEC SPIFFS - Inicjalizacja -----------------
+    if (!STORAGE_BEGIN())
+    {
+      Serial.println("Błąd inicjalizacji pamieci STORAGE!"); // Informacja o problemach lub braku karty SD
+      noSDcard = true;                                // Flaga braku karty SD
+    }
+    else
+    {
+      Serial.println("Pamiec STORAGE zainicjalizowana pomyślnie.");
+      noSDcard = false;
+    }
+  #endif
+  delay(50);
 
-  // Apply equalizer settings after config is loaded
-  applyEqualizerSettings();  // Apply EQ system preference from config
+  // ========== 16-BAND GRAPHIC EQUALIZER INITIALIZATION (PART 2) ==========
+  // Load EQ16 settings from SD card (must be done AFTER storage initialization)
+  #if defined(ENABLE_EQ16) && (ENABLE_EQ16 == 1)
+    if (!noSDcard) {
+      EQ16_loadFromSD();                        // Załaduj ostatnie ustawienia z SD
+      Serial.println("[EQ16] Settings loaded from SD card");
+    } else {
+      Serial.println("[EQ16] No SD card - using default flat EQ");
+    }
+  #endif
+  // ========================================================================
+
+  loadSDPlayerSessionState();
   
+  // PUNKT 3: PERSISTENT STATE - sprawdź czy SD Player był aktywny przed wyłączeniem
+  bool shouldAutoStartSDPlayer = false;
+  if (STORAGE.exists(sdPlayerActiveStateFile)) {
+    File stateFile = STORAGE.open(sdPlayerActiveStateFile, FILE_READ);
+    if (stateFile) {
+      String state = stateFile.readStringUntil('\n');
+      state.trim();
+      shouldAutoStartSDPlayer = (state == "1");
+      stateFile.close();
+      Serial.printf("SD Player: Auto-start state loaded: %s\n", shouldAutoStartSDPlayer ? "YES" : "NO");
+    }
+  }
+  
+  // Odczyt konfiguracji
+  readConfig();          
+  if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku config.txt to go tworzymy
+  
+  // KRYTYCZNE: Odczyt konfiguracji analizatora z /analyzer.cfg
+  // Sprawdź czy plik analyzer.cfg istnieje (używaj STORAGE, nie SD/SPIFFS!)
+  Serial.println("=== INICJALIZACJA ANALIZATORA ===");
+  bool analyzerCfgExists = STORAGE.exists("/analyzer.cfg");
+  Serial.printf("Plik analyzer.cfg istnieje: %s\n", analyzerCfgExists ? "TAK" : "NIE");
+  
+  analyzerStyleLoad();  // Wczytaj zapisane ustawienia analizatora lub użyj domyślnych
+  
+  if (!analyzerCfgExists) {
+    // Plik nie istnieje - zapisz domyślne wartości
+    Serial.println("Tworzenie analyzer.cfg z domyslnymi wartosciami...");
+    analyzerStyleSave();
+    Serial.println("Analyzer: Created /analyzer.cfg with default values");
+  } else {
+    Serial.println("Analyzer: Configuration loaded from /analyzer.cfg");
+  }
 
   if ((esp_reset_reason() != ESP_RST_POWERON) || (!f_sleepAfterPowerFail))
   {
     u8g2.clearBuffer();
+    if (f_logoSlowBrightness) {u8g2.setContrast(0);}
+
     if (!loadXBM("/logo.xbm")) 
     {
-      Serial.println("Start LOGO loading from Storage FAILED");
+      Serial.println("No logo in storage memory, loading notes...");
       u8g2.drawXBMP(0, 5, notes_width, notes_height, notes);  // obrazek - nutki
+      u8g2.setFont(u8g2_font_fub14_tf);
+      u8g2.drawStr(38, 17, "Evo Internet Radio");
+      u8g2.sendBuffer();
     }
     else
     {
+      
       u8g2.drawXBMP(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, logo_bits); // obrazek - logo z pamieci
-      u8g2.sendBuffer();
-      delay(50); // Przyspieszenie uruchamiania - zmniejszone z 200ms
+      u8g2.sendBuffer();     
+      f_logo = 1;
     }   
-    u8g2.setFont(u8g2_font_fub14_tf);
-    //u8g2.clearBuffer();
-    //u8g2.drawStr(38, 17, "Evo Internet Radio");
-    u8g2.drawStr(38, 14, "Evo Internet Radio");
+
+    // ---- POWOLNE ROZJASNIANIE LOGO NUTKI / WGRANE LOGO ----
+    if (f_logoSlowBrightness)
+    {
+      for (int i = 0; i <= displayBrightness; i++)
+        {
+          u8g2.setContrast(i);
+          //uint8_t corrected = (i * i) / 255;   // gamma ≈ 2.0
+          //u8g2.setContrast(corrected);
+          delay(10); 
+        }
+      u8g2.setContrast(displayBrightness); // Dodatkowe przeładowanie jasnosci          
+    }
+     
     u8g2.setFont(spleen6x12PL);
     u8g2.drawStr(208, 62, softwareRev);
     u8g2.sendBuffer();
   }
   
-  /*
-  for (int i = 0; i <= configArray[0]; i++)
-  {
-    u8g2.setContrast(i);
-    delay(20); 
-  }
-  u8g2.setContrast(displayBrightness); // Dodatkowe przeładowanie jasnosci
-  if (displayBrightness == 1) {u8g2.setContrast(180);} // Zabezpiecznie na wypadek braku pliku config lub karty SD/pamieci SPIFFS
-  */
-
-
+  #ifndef AUTOSTORAGE
   // Informacja na wyswietlaczu o problemach lub braku karty SD
   if (noSDcard) // flaga noSDcard ustawia sie jesli nie wykryto karty
   {
@@ -8858,13 +10996,14 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
     u8g2.drawXBMP(220, 3, 30, 40, sdcard);  // ikona SD karty
     u8g2.sendBuffer();
   }
-  
+  #endif
+
   u8g2.setFont(spleen6x12PL);
   if ((esp_reset_reason() == ESP_RST_POWERON) && (f_sleepAfterPowerFail)) {u8g2.drawStr(5, 50, "Wakeup after power loss, syncing NTP");}
-  u8g2.drawStr(5, 62, "Connecting to network...    ");
-
+  if (f_logo) {u8g2.drawStr(5, 62, "Evo Web Radio, connecting...");} else {u8g2.drawStr(5, 62, "Connecting to network...    ");}
   u8g2.sendBuffer();
-  //u8g2.sendF("ca", 0xC7, displayBrightness); // Ustawiamy jasność ekranu zgodnie ze zmienna displayBrightness
+  //delay(1000); // Popatrzmy dłuzej na nutki lub logo :)
+  
   #ifdef twoEncoders
     button1.setDebounceTime(50);  // Ustawienie czasu debouncingu dla przycisku enkodera 2
   #endif
@@ -8873,23 +11012,12 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
   
 
     
-  // Inicjalizacja WiFiManagera - optymalizacja prędkości (bardziej konserwatywna)
+  // Inicjalizacja WiFiManagera
   wifiManager.setConfigPortalBlocking(false);
-  wifiManager.setConnectTimeout(12); // Zwiększone z 5s na 12s dla stabilnego połączenia
-  wifiManager.setConfigPortalTimeout(25); // Portal config 25s (rozsądny kompromis)
-  wifiManager.setScanDispPerc(false); // Wyłącz wyświetlanie procentów
-  wifiManager.setMinimumSignalQuality(8); // Zwiększone z 5 na 8 dla lepszej jakości
-  wifiManager.setConnectRetries(2); // Przywrócone 2 próby połączenia
-  wifiManager.setWiFiAutoReconnect(true); // Auto reconnect
-  wifiManager.setCleanConnect(true); // Szybsze przełączanie
-  wifiManager.setSaveConfigCallback([](){Serial.println("WiFi config saved");});
 
+  // ---- ODCZYTY RÓZNYCH USTAWIEN Z KARTY SD / PAMIECI SPIFFS ----
   readStationFromSD();       // Odczytujemy zapisaną ostanią stację i bank z karty SD /EEPROMu
   readEqualizerFromSD();     // Odczytujemy ustawienia filtrów equalizera z karty SD 
-  
-  // Initialize equalizer system - useEQ16 is read from config in readConfig()
-  // Note: useEQ16 value will be updated in readConfig(), no need to set default here
-  
   readVolumeFromSD();        // Odczytujemy nastawę ostatniego poziomu głośnosci z karty SD /EEPROMu
   readAdcConfig();           // Odczyt konfiguracji klawitury ADC
   readRemoteControlConfig(); // Odczyt konfiguracji pilota IR
@@ -8900,10 +11028,7 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
   //audio.setVolume(0);                  // Ustaw głośność na podstawie wartości zmiennej volumeValue w zakresie 0...21
   
   // ----------------- EKRAN - JASNOŚĆ -----------------
-  u8g2.setContrast(displayBrightness);
-
-  // Start CPU monitoring - ENABLED
-  startCpuMonitoring(); 
+  u8g2.setContrast(displayBrightness); 
 
   // -------------------- RECOVERY MODE --------------------
   recoveryModeCheck();
@@ -8912,8 +11037,18 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
   SDPlayerOLED_init(&u8g2);  // Inicjalizacja SD Player z OLED
   Serial.println("SDPlayer: Initialized");
   
+  // -------------------- SDRECORDER INIT --------------------
+  SDRecorder_init();  // Inicjalizacja modułu nagrywania
+  
+  // PUNKT 3: AUTO-START SD PLAYER jeśli był aktywny przed wyłączeniem
+  if (shouldAutoStartSDPlayer && g_sdPlayerOLED) {
+    Serial.println("SD Player: Auto-starting from previous session...");
+    g_sdPlayerOLED->activate();
+    sdPlayerOLEDActive = true;
+  }
+  
   // -------------------- BLUETOOTH WEBUI INIT --------------------
-  BTWebUI_init();  // Inicjalizacja Bluetooth WebUI
+  BTWebUI_init();  // Inicjalizacja Bluetooth WebUI (zawsze dostępne)
   Serial.println("BTWebUI: Initialized");
   
   // -------------------- BLUETOOTH KCX INIT --------------------
@@ -8928,17 +11063,50 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
   Serial.println(station_nr);
 
   // Rozpoczęcie konfiguracji Wi-Fi i połączenie z siecią, jeśli konieczne
-  if (wifiManager.autoConnect("EVO-Radio")) 
+  // Animacja gwiazdek PRZED uruchomieniem WiFi
+  Serial.println("Starting WiFi animation...");
+  for (int frame = 0; frame < 100; frame++) {  // 100 klatek = 5 sekund przy 50ms
+    drawStarField(&u8g2, frame);
+    delay(50); // ~20 FPS
+  }
+  
+  Serial.println("[WiFi] Konfiguracja WiFiManager...");
+  
+  // OPTYMALIZACJA WIFI - szybsze łączenie i stabilność strumieniowania
+  WiFi.mode(WIFI_STA);              // Ustaw tryb Station
+  WiFi.setSleep(false);              // KRYTYCZNE: Wyłącz WiFi sleep mode (zapobiega AUTH_EXPIRE)
+  WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksymalna moc WiFi dla stabilności strumieniowania FLAC/AAC
+  WiFi.setAutoReconnect(true);       // Automatyczne ponowne łączenie
+  WiFi.persistent(true);             // Zapisuj konfigurację WiFi w flash
+  
+  wifiManager.setConnectTimeout(20); // 20 sekund timeout (wystarczy bez błędów auth expire)
+  wifiManager.setTimeout(180); // 3 minuty timeout portalu konfiguracyjnego
+  wifiManager.setConfigPortalBlocking(false);
+  
+  Serial.println("[WiFi] Próba połączenia z zapisaną siecią...");
+  Serial.printf("[WiFi] SSID: %s\n", wifiManager.getWiFiSSID().c_str());
+  wifiManager.autoConnect("EVO-Radio");
+  
+  // PUNKT 2: NON-BLOCKING WIFI - czekaj max 15 sekund na połączenie
+  Serial.println("[WiFi] Waiting for connection (max 15s)...");
+  unsigned long wifiStartTime = millis();
+  int wifiRetryCount = 0;
+  while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartTime < 15000)) {
+    delay(500);
+    Serial.print(".");
+    wifiRetryCount++;
+    if (wifiRetryCount % 10 == 0) {
+      Serial.printf(" %d%%\n", (int)((millis() - wifiStartTime) / 150));
+    }
+  }
+  Serial.println();
+  
+  if (WiFi.status() == WL_CONNECTED) 
   {
-    Serial.println("Połączono z siecią WiFi");
+    Serial.println("[WiFi] ✓ Połączono z siecią WiFi");
+    Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
     currentIP = WiFi.localIP().toString();  //konwersja IP na string
-    u8g2.setFont(spleen6x12PL);
-    u8g2.drawStr(5, 62, "                               ");  // czyszczenie lini spacjami
-    u8g2.sendBuffer();
-    u8g2.drawStr(5, 62, "Connected, IP:");  //wyswietlenie IP
-    u8g2.drawStr(90, 62, currentIP.c_str());   //wyswietlenie IP
-    u8g2.sendBuffer();
-    delay(50);  // Przyspieszenie - zmniejszone ze 150ms
     
     if (MDNS.begin(hostname)) { Serial.println("mDNS wystartowal, adres: " + String(hostname) + ".local w przeglądarce"); MDNS.addService("http", "tcp", 80);}
         
@@ -8947,10 +11115,10 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
     struct tm timeinfo;
     int retry = 0;
     Serial.println("debug RTC -> synchronizacja NTP pierwszy raz od startu");
-    while (!getLocalTime(&timeinfo) && retry < 2) // Zmniejszony retry z 3 na 2 dla szybszego startu
+    while (!getLocalTime(&timeinfo) && retry < 10) 
     {
       Serial.println("debug RTC -> Czekam na synchronizację czasu NTP...");
-      delay(200); // Przyspieszenie - zmniejszone z 300ms na 200ms
+      delay(1000);
       retry++;
     }
 
@@ -9134,86 +11302,12 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
       u8g2.setCursor(5, 12); u8g2.print("Evo Radio, OTA Firwmare Update");
       u8g2.sendBuffer();
 
-      /*
-      String html = "";
-      html += "<!DOCTYPE html>";
-      html += "<html lang='en'>";
-      html += "<head>";
-      html += "<meta charset='UTF-8' />";
-      html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'/>";
-      html += "<title>ESP OTA Update</title>";
-      html += "<style>";
-      html += "body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; color: #333; padding: 40px; text-align: center; }";
-      html += "h2 { margin-bottom: 30px; color: #111; font-size: 1.3rem;}";
-      html += "#uploadSection { background-color: white; padding: 30px; border-radius: 8px; display: inline-block; box-shadow: 0 0 10px rgba(0, 0, 0, 0.1); }";
-      html += "input[type='file'] { padding: 10px; }";
-      html += "button { margin-top: 20px; padding: 10px 20px; background-color: #4CAF50; border: none; color: white; font-size: 16px; border-radius: 5px; cursor: pointer; }";
-      html += "button:disabled { background-color: #ccc; cursor: not-allowed; }";
-      html += "progress { width: 100%; height: 20px; margin-top: 20px; border-radius: 5px; appearance: none; -webkit-appearance: none; }";
-      html += "progress::-webkit-progress-bar { background-color: #eee; border-radius: 5px; }";
-      html += "progress::-webkit-progress-value { background-color: #4CAF50; border-radius: 5px; }";
-      html += "progress::-moz-progress-bar { background-color: #4CAF50; border-radius: 5px; }";
-      html += "#status { margin-top: 15px; font-weight: bold; }";
-      html += "#fileInfo { color: #555; margin-top: 10px; }";
-      html += "</style>";
-      html += "</head>";
-      html += "<body>";
-      html += "<div id='uploadSection'>";
-      html += "<h2>Evo Web Radio - OTA Firmware Update</h2>";
-      html += "<input type='file' id='fileInput' name='update' /><br />";
-      html += "<div id='fileInfo'>No file selected</div>";
-      html += "<button id='uploadBtn'>Upload</button>";
-      html += "<p id='status'></p>";
-      html += "</div>";
-      html += "<script>";
-      html += "const fileInput = document.getElementById('fileInput');";
-      html += "const uploadBtn = document.getElementById('uploadBtn');";
-      html += "const status = document.getElementById('status');";
-      html += "const fileInfo = document.getElementById('fileInfo');";
-      html += "fileInput.addEventListener('change', function () {";
-      html += "  const file = this.files[0];";
-      html += "  if (file) {";
-      html += "    fileInfo.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;";
-      html += "  } else {";
-      html += "    fileInfo.textContent = 'No file selected';";
-      html += "  }";
-      html += "});";
-      html += "uploadBtn.addEventListener('click', function () {";
-      html += "  const file = fileInput.files[0];";
-      html += "  if (!file) { alert('Please select a file first.'); return; }";
-      html += "  uploadBtn.disabled = true;";
-      html += "  status.textContent = 'Uploading...';";
-      html += "  const xhr = new XMLHttpRequest();";
-      html += "  const formData = new FormData();";
-      html += "  formData.append('update', file);";
-      html += "  xhr.open('POST', '/firmwareota', true);";
-      html += "  xhr.onload = function () {";
-      html += "    if (xhr.status === 200) {";
-      html += "      status.textContent = '✅ Upload completed, reboot in 3 sec.';";
-      html += "      setTimeout(() => { window.location.href = '/'; }, 10000);";
-      html += "    } else {";
-      html += "      status.textContent = '❌ Upload failed.';";
-      html += "    }";
-      html += "    uploadBtn.disabled = false;";
-      html += "  };";
-      html += "  xhr.onerror = function () {";
-      html += "    status.textContent = '❌ Network error.';";
-      html += "    uploadBtn.disabled = false;";
-      html += "  };";
-      html += "  xhr.send(formData);";
-      html += "});";
-      html += "</script>";
-      html += "</body>";
-      html += "</html>";
-      */
-
-      //request->send(200, "text/html", html);
       request->send(200, "text/html", String(ota_html));
       //request->send(SD, "/ota.html", "text/html"); //"application/octet-stream");
     });
 
     server.on("/page1", HTTP_GET, [](AsyncWebServerRequest *request)
-    { // Strona do celow testowych ladowana z karty SD
+    { // Strona do celow testowych ladowana ze STORAGE (karty Sd lub pamieci FS)
       request->send(STORAGE, "/page1.html", "text/html"); //"application/octet-stream");
     });
 
@@ -9293,8 +11387,12 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
       String html = String(list_html) + String("\n");
       
       //html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - SD / SPIFFS:</h2>" + String("\n");
-      if (useSD) html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - SD card:</h2>" + String("\n");
-      else html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - SPIFFS memory:</h2>" + String("\n");
+      html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - ";
+      html += storageTextName;
+      html += "</h2>" + String("\n");
+      
+      //if (useSD) html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - SD card:</h2>" + String("\n");
+      //else html += "<body><h2 style='font-size: 1.3rem;'>Evo Web Radio - SPIFFS memory:</h2>" + String("\n");
 
       html += "<form action=\"/upload\" method=\"POST\" enctype=\"multipart/form-data\">";
       html += "<input type=\"file\" name=\"file\">";
@@ -9331,8 +11429,6 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
         html.replace(F("%D10"), String(vuRiseSpeed));
         html.replace(F("%D11"), String(vuFallSpeed));
         html.replace(F("%D12"), String(dimmerSleepDisplayBrightness));
-        html.replace(F("%ANALYZER_STYLES"), String(analyzerStylesMode));
-        html.replace(F("%ANALYZER_PRESET"), String(analyzerCurrentPreset));
         
         html.replace(F("%D1"), String(displayBrightness));
         html.replace(F("%D2"), String(dimmerDisplayBrightness));
@@ -9343,6 +11439,8 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
         html.replace(F("%D7"), String(vuMeterRefreshTime));
         html.replace(F("%D8"), String(scrollingRefresh));
         html.replace(F("%D9"), String(displayPowerSaveTime));
+        html.replace(F("%A1"), String(analyzerStyles)); // analyzerStyles
+        html.replace(F("%A2"), String(analyzerPreset)); // analyzerPreset
 
         //Opcje CheckBox
         html.replace(F("%S11_checked"), maxVolumeExt ? " checked" : "");
@@ -9353,15 +11451,31 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
         html.replace(F("%S21_checked"), f_sleepAfterPowerFail ? " checked" : "");
         html.replace(F("%S22_checked"), f_volumeFadeOn ? " checked" : "");
         html.replace(F("%S23_checked"), f_saveVolumeStationAlways ? " checked" : "");
-        
+        html.replace(F("%S24_checked"), f_powerOffAnimation ? " checked" : "");      
+        html.replace(F("%S25_checked"), analyzerEnabled ? " checked" : "");
+        html.replace(F("%S26_checked"), btModuleEnabled ? " checked" : "");
+        html.replace(F("%S27_checked"), displayMode6Enabled ? " checked" : "");
+        html.replace(F("%S29_checked"), displayMode8Enabled ? " checked" : "");
+        html.replace(F("%S28_checked"), displayMode10Enabled ? " checked" : "");
+        html.replace(F("%S31_checked"), sdPlayerStyle1Enabled ? " checked" : "");
+        html.replace(F("%S32_checked"), sdPlayerStyle2Enabled ? " checked" : "");
+        html.replace(F("%S33_checked"), sdPlayerStyle3Enabled ? " checked" : "");
+        html.replace(F("%S34_checked"), sdPlayerStyle4Enabled ? " checked" : "");
+        html.replace(F("%S35_checked"), sdPlayerStyle5Enabled ? " checked" : "");
+        html.replace(F("%S36_checked"), sdPlayerStyle6Enabled ? " checked" : "");
+        html.replace(F("%S37_checked"), sdPlayerStyle7Enabled ? " checked" : "");
+        html.replace(F("%S38_checked"), sdPlayerStyle9Enabled ? " checked" : "");
+        html.replace(F("%S39_checked"), sdPlayerStyle10Enabled ? " checked" : "");
+        html.replace(F("%S40_checked"), sdPlayerStyle11Enabled ? " checked" : "");
+        html.replace(F("%S41_checked"), sdPlayerStyle12Enabled ? " checked" : "");
+        html.replace(F("%S42_checked"), sdPlayerStyle13Enabled ? " checked" : "");
+        html.replace(F("%S43_checked"), sdPlayerStyle14Enabled ? " checked" : "");
 
         html.replace(F("%S1_checked"), displayAutoDimmerOn ? " checked" : "");
         html.replace(F("%S3_checked"), timeVoiceInfoEveryHour ? " checked" : "");
         html.replace(F("%S5_checked"), vuMeterOn ? " checked" : "");
         html.replace(F("%S7_checked"), adcKeyboardEnabled ? " checked" : "");
         html.replace(F("%S9_checked"), displayPowerSaveEnabled ? " checked" : "");
-        html.replace(F("%S24_checked"), eqAnalyzerOn ? " checked" : "");
-        html.replace(F("%EQ16_ENABLED_checked"), EQ16_isEnabled() ? " checked" : "");
               
 
         request->send(200, "text/html", html);
@@ -9456,7 +11570,7 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
       request->send(200, "text/html", "<h1>ADC Keyboard Thresholds Updated!</h1><a href='/menu'>Go Back</a>");
       
       saveAdcConfig(); 
-      
+       
       //ODswiezenie ekranu OLED po zmianach konfiguracji
       ir_code = rcCmdBack; // Udajemy kod pilota Back
       bit_count = 32;
@@ -9484,67 +11598,84 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
       f_sleepAfterPowerFail      = request->hasParam("f_sleepAfterPowerFail", true);
       f_volumeFadeOn             = request->hasParam("f_volumeFadeOn", true);
       f_saveVolumeStationAlways  = request->hasParam("f_saveVolumeStationAlways", true);
-      eqAnalyzerOn               = request->hasParam("eqAnalyzerOn", true);
-      eqAnalyzerSetFromWeb(eqAnalyzerOn);
-      
-      // EQ16 Graphic Equalizer
-      bool eq16Enabled = request->hasParam("eq16Enabled", true);
-      Serial.printf("DEBUG: Web EQ16 setting: eq16Enabled=%s\n", eq16Enabled ? "true" : "false");
-      
-      // Update EQ system preference if it changed
-      bool oldUseEQ16 = useEQ16;
-      useEQ16 = eq16Enabled;
-      
-      EQ16_enable(eq16Enabled);
-      EQ16_saveToSD();  // Zapisz ustawienia EQ16 natychmiast
-      
-      // Save config if EQ system changed
-      if (oldUseEQ16 != useEQ16) {
-        saveConfig();
-        Serial.printf("DEBUG: EQ system changed via web - saved to config\n");
-      }
-      Serial.println("DEBUG: EQ16 web settings saved");
-      
-      // Nowe parametry analizatora
-      if (request->hasParam("analyzerStylesMode", true)) {
-        analyzerStylesMode = request->getParam("analyzerStylesMode", true)->value().toInt();
-        analyzerSetStyleMode(analyzerStylesMode);
-      }
-      if (request->hasParam("analyzerCurrentPreset", true)) {
-        analyzerCurrentPreset = request->getParam("analyzerCurrentPreset", true)->value().toInt();
-        analyzerApplyPreset(analyzerCurrentPreset);
-      }
+      f_powerOffAnimation        = request->hasParam("f_powerOffAnimation", true);
+      analyzerEnabled            = request->hasParam("fftAnalyzerOn", true);
+      btModuleEnabled            = request->hasParam("btModuleEnabled", true);
+      displayMode6Enabled        = request->hasParam("displayMode6Enabled", true);
+      displayMode8Enabled        = request->hasParam("displayMode8Enabled", true);
+      displayMode10Enabled       = request->hasParam("displayMode10Enabled", true);
+      sdPlayerStyle1Enabled      = request->hasParam("sdPlayerStyle1", true);
+      sdPlayerStyle2Enabled      = request->hasParam("sdPlayerStyle2", true);
+      sdPlayerStyle3Enabled      = request->hasParam("sdPlayerStyle3", true);
+      sdPlayerStyle4Enabled      = request->hasParam("sdPlayerStyle4", true);
+      sdPlayerStyle5Enabled      = request->hasParam("sdPlayerStyle5", true);
+      sdPlayerStyle6Enabled      = request->hasParam("sdPlayerStyle6", true);
+      sdPlayerStyle7Enabled      = request->hasParam("sdPlayerStyle7", true);
+      sdPlayerStyle9Enabled      = request->hasParam("sdPlayerStyle9", true);
+      sdPlayerStyle10Enabled     = request->hasParam("sdPlayerStyle10", true);
+      sdPlayerStyle11Enabled     = request->hasParam("sdPlayerStyle11", true);
+      sdPlayerStyle12Enabled     = request->hasParam("sdPlayerStyle12", true);
+      sdPlayerStyle13Enabled     = request->hasParam("sdPlayerStyle13", true);
+      sdPlayerStyle14Enabled     = request->hasParam("sdPlayerStyle14", true);
 
       // Jeśli parametr istnieje checkbox był zaznaczony to TRUE
       // Jeśli go nie ma checkbox nie był zaznaczony to FALSE
 
       if (request->hasParam("vuMeterMode", true)) {vuMeterMode = request->getParam("vuMeterMode", true)->value().toInt();}
       if (request->hasParam("encoderFunctionOrder", true)) {encoderFunctionOrder = request->getParam("encoderFunctionOrder", true)->value().toInt();}
-      if (request->hasParam("displayMode", true)) {displayMode = request->getParam("displayMode", true)->value().toInt();}
+      if (request->hasParam("displayMode", true)) {
+        displayMode = request->getParam("displayMode", true)->value().toInt();
+        // Pomijamy style 7-9 (brak implementacji)
+        if (displayMode >= 7 && displayMode <= 9) {displayMode = 10;}
+        // Pomijamy style >= 11 (brak implementacji)
+        if (displayMode >= 11) {displayMode = 0;}
+      }
       if (request->hasParam("vuMeterRefreshTime", true)) {vuMeterRefreshTime = request->getParam("vuMeterRefreshTime", true)->value().toInt();}
       if (request->hasParam("scrollingRefresh", true)) {scrollingRefresh = request->getParam("scrollingRefresh", true)->value().toInt();}
       if (request->hasParam("displayPowerSaveTime", true)) {displayPowerSaveTime = request->getParam("displayPowerSaveTime", true)->value().toInt();}
       if (request->hasParam("vuRiseSpeed", true)) {vuRiseSpeed = request->getParam("vuRiseSpeed", true)->value().toInt();}
       if (request->hasParam("vuFallSpeed", true)) {vuFallSpeed = request->getParam("vuFallSpeed", true)->value().toInt();}
+      if (request->hasParam("analyzerStyles", true)) {
+        analyzerStyles = request->getParam("analyzerStyles", true)->value().toInt();
+        if (analyzerStyles < 0) analyzerStyles = 0;
+        if (analyzerStyles > 2) analyzerStyles = 2;
+      }
+      
+      // Obsługa zmiany presetu analizatora
+      bool presetChanged = false;
+      int oldPreset = analyzerPreset;
+      if (request->hasParam("analyzerPreset", true)) {
+        analyzerPreset = request->getParam("analyzerPreset", true)->value().toInt();
+        if (analyzerPreset < 0) analyzerPreset = 0;
+        if (analyzerPreset > 4) analyzerPreset = 4;
+        if (analyzerPreset != oldPreset) {
+          presetChanged = true;
+        }
+      }
+      
+      // Zastosuj ustawienia analizatora i equalizera 3-point
+      eq_analyzer_set_enabled(analyzerEnabled);
+      
+      // Jeśli preset się zmienił, zastosuj go i zapisz
+      if (presetChanged) {
+        analyzerApplyPreset(analyzerPreset);
+        analyzerStyleSave();
+        Serial.println("Analyzer: Applied and saved preset " + String(analyzerPreset));
+      }
+      readEqualizerFromSD();
+      audio.setTone(toneLowValue, toneMidValue, toneHiValue);
 
       saveConfig();
       readConfig();
-      clearFlags();
+      //clearFlags();
+      
+      //Refresh
+      ir_code = rcCmdBack; // Udajemy kod pilota Back
+      bit_count = 32;
+      calcNec();          // Przeliczamy kod pilota na pełny oryginalny kod NEC
+
       //request->send(200, "text/html","<h1>Config Updated!</h1><a href='/menu'>Go Back</a>");
       request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/'></head><body><h1>Config Updated!</h1></body></html>");
-    });
-    
-    // EQ16 Endpoints
-    server.on("/eq16reset", HTTP_GET, [](AsyncWebServerRequest *request) {
-      EQ16_resetAllBands();
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/'></head><body><h1>EQ16 All Bands Reset!</h1></body></html>");
-    });
-    
-    server.on("^/eq16preset/(\\d+)$", HTTP_GET, [](AsyncWebServerRequest *request) {
-      String presetStr = request->pathArg(0);
-      uint8_t presetId = presetStr.toInt();
-      EQ16_loadPreset(presetId);
-      request->send(200, "text/html","<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2;url=/'></head><body><h1>EQ16 Preset " + presetStr + " Loaded!</h1></body></html>");
     });
     
     // =====================================================================================
@@ -9555,23 +11686,76 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
     // =====================================================================================
     // BLUETOOTH WEBUI ENDPOINTS (MUST BE REGISTERED BEFORE OTHER /bt ROUTES)
     // =====================================================================================
-    BTWebUI_registerHandlers(server);  // Rejestracja handlerów BTWebUI
+    BTWebUI_registerHandlers(server);  // Rejestracja handlerów BTWebUI (zawsze dostępne)
     
-    // TESTOWY ENDPOINT - sprawdzenie czy routing działa
-    server.on("/bt/api/maintest", HTTP_GET, [](AsyncWebServerRequest *request) {
-        Serial.println("[MAIN TEST] Direct test endpoint called!");
-        request->send(200, "text/plain", "MAIN.CPP TEST OK - direct routing works!");
+    // Analyzer endpoints
+    server.on("/analyzer", HTTP_GET, [](AsyncWebServerRequest *request) {
+      String html = analyzerBuildHtmlPage();
+      request->send(200, "text/html", html);
     });
-    
-    // =====================================================================================
-    // OLD BT ENDPOINTS - DISABLED (commented out to avoid conflicts)
-    // =====================================================================================
-    // NOTE: All old /bt routes are commented out to prevent conflicts with BTWebUI
-    /*
-    server.on("/bt", HTTP_GET, [](AsyncWebServerRequest *request) {
-      ... old code ...
+
+    server.on("/analyzerApply", HTTP_POST, [](AsyncWebServerRequest *request) {
+      // Parse all analyzer parameters from POST request
+      int paramCount = request->params();
+      String settings = "";
+      for(int i = 0; i < paramCount; i++) {
+        const AsyncWebParameter* p = request->getParam(i);
+        if(p->isPost()) {
+          String name = p->name();
+          String value = p->value();
+          settings += name + "=" + value + "\n";
+        }
+      }
+      
+      // Apply configuration from parsed settings
+      if(settings.length() > 0) {
+        analyzerStyleLoadFromString(settings);
+      }
+      
+      request->send(200, "text/plain", "Settings applied");
     });
-    */
+
+    server.on("/analyzerSave", HTTP_POST, [](AsyncWebServerRequest *request) {
+      // Same parsing as analyzerApply but also save to file
+      int paramCount = request->params();
+      String settings = "";
+      for(int i = 0; i < paramCount; i++) {
+        const AsyncWebParameter* p = request->getParam(i);
+        if(p->isPost()) {
+          String name = p->name();
+          String value = p->value();
+          settings += name + "=" + value + "\n";
+        }
+      }
+      
+      // Apply and save configuration
+      if(settings.length() > 0) {
+        analyzerStyleLoadFromString(settings);
+        analyzerStyleSave();
+      }
+      
+      request->send(200, "text/plain", "Settings saved");
+    });
+
+    server.on("/analyzerPreset", HTTP_POST, [](AsyncWebServerRequest *request) {
+      if(request->hasParam("preset", true)) {
+        int presetId = request->getParam("preset", true)->value().toInt();
+        if(presetId >= 0 && presetId <= 4) {
+          analyzerApplyPreset(presetId);
+          analyzerStyleSave();
+          request->send(200, "text/plain", "Preset " + String(presetId) + " applied");
+        } else {
+          request->send(400, "text/plain", "Invalid preset ID");
+        }
+      } else {
+        request->send(400, "text/plain", "Missing preset parameter");
+      }
+    });
+
+    server.on("/analyzerCfg", HTTP_GET, [](AsyncWebServerRequest *request) {
+      String json = analyzerStyleToJson();
+      request->send(200, "application/json", json);
+    });
     
     server.on("/toggleAdcDebug", HTTP_POST, [](AsyncWebServerRequest *request) 
     {
@@ -9665,7 +11849,63 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
         request->send(400, "text/plain", "No file name");
       }
     });
- 
+  
+    /*
+    server.on("/editordata", HTTP_GET, [](AsyncWebServerRequest *request) 
+    {
+      if (!request->hasParam("filename")) {
+          request->send(400, "text/plain", "No file name");
+          return;
+      }
+
+      String filename = request->getParam("filename")->value();
+      File file = STORAGE.open(filename);
+      if (!file) {
+          request->send(404, "text/plain", "File not found");
+          return;
+      }
+
+      // Tworzymy odpowiedź strumieniową tekstową
+      AsyncWebServerResponse *response = request->beginResponseStream("text/plain");
+      AsyncWebServerResponseStream *stream = static_cast<AsyncWebServerResponseStream*>(response);
+
+      while (file.available()) {
+          String line = file.readStringUntil('\n');
+          stream->print(line + "\n");  // tu działa print
+      }
+
+      file.close();
+      request->send(response);
+    });
+    */
+    server.on("/editordata", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!request->hasParam("filename")) {
+        request->send(400, "text/plain", "No file name");
+        return;
+    }
+
+    String filename = "/" + request->getParam("filename")->value();
+
+    File file = STORAGE.open(filename);
+    if (!file) {
+        request->send(404, "text/plain", "File not found");
+        return;
+    }
+
+    // Tworzymy strumień odpowiedzi typu text/plain
+    AsyncResponseStream *response = request->beginResponseStream("text/plain");
+
+    while (file.available()) {
+        String line = file.readStringUntil('\n');
+        response->print(line + "\n");  // działa tylko z AsyncResponseStream
+    }
+
+    file.close();
+    request->send(response);
+});
+
+
+
     server.on("/download", HTTP_ANY, [](AsyncWebServerRequest *request) {
       if (request->hasParam("filename")) {
         String filename = request->getParam("filename")->value();
@@ -9773,8 +12013,9 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
       html.replace("%D4", String(wifiManager.getWiFiSSID()).c_str()); 
       html.replace("%D5", currentIP.c_str()); 
       html.replace("%D6", WiFi.macAddress().c_str()); 
-      if (useSD) html.replace("%D7", String("SD").c_str()); 
-      else html.replace("%D7", String("SPIFFS").c_str()); 
+      html.replace("%D7", String(storageTextName).c_str()); 
+      //if (useSD) html.replace("%D7", String("SD").c_str()); 
+      //else html.replace("%D7", String("SPIFFS").c_str()); 
       html.replace("%D0", chipStr); 
       f_callInfo = true;
       
@@ -9812,1506 +12053,525 @@ if (configExist == false) { saveConfig(); readConfig();} // Jesli nie ma pliku c
 
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);
-    // ------------------- Analyzer Style Editor (oddzielna strona: /analyzer) -------------------
-server.on("/analyzer", HTTP_GET, [](AsyncWebServerRequest *request){
-  request->send(200, "text/html", analyzerBuildHtmlPage());
-});
-
-server.on("/analyzerSave", HTTP_POST, [](AsyncWebServerRequest *request){
-  Serial.println("DEBUG: /analyzerSave wywołane!");
-  AnalyzerStyleCfg c = analyzerGetStyle();
-  Serial.printf("DEBUG: Stare wartości: s5w=%u, s5g=%u, s6w=%u\n", c.s5_barWidth, c.s5_barGap, c.s6_width);
-
-  auto getInt = [&](const char* n, int def)->int {
-    if(!request->hasParam(n, true)) {
-      Serial.printf("DEBUG: Parametr %s BRAK! Używam default=%d\n", n, def);
-      return def;
-    }
-    int val = request->getParam(n, true)->value().toInt();
-    Serial.printf("DEBUG: Parametr %s = %d\n", n, val);
-    return val;
-  };
-  auto getFloat = [&](const char* n, float def)->float {
-    if(!request->hasParam(n, true)) return def;
-    return request->getParam(n, true)->value().toFloat();
-  };
-  auto getBool = [&](const char* n)->bool {
-    return request->hasParam(n, true) && request->getParam(n, true)->value() == "1";
-  };
-
-  // Styl 5
-  c.s5_barWidth = (uint8_t)getInt("s5w", c.s5_barWidth);
-  c.s5_barGap   = (uint8_t)getInt("s5g", c.s5_barGap);
-  c.s5_segments = (uint8_t)getInt("s5seg", c.s5_segments);
-  c.s5_segHeight = (uint8_t)getInt("s5segH", c.s5_segHeight);
-  c.s5_fill     = getFloat("s5fill", c.s5_fill);
-  c.s5_peakHeight = (uint8_t)getInt("s5peakH", c.s5_peakHeight);
-  c.s5_peakGap = (uint8_t)getInt("s5peakG", c.s5_peakGap);
-  c.s5_showPeaks = getBool("s5peaks");
-  c.s5_barBrightness = (uint8_t)getInt("s5barBrightness", c.s5_barBrightness);
-  c.s5_peakBrightness = (uint8_t)getInt("s5peakBrightness", c.s5_peakBrightness);
-  c.s5_smoothness = (uint8_t)getInt("s5smooth", c.s5_smoothness);
-
-  // Styl 6
-  c.s6_width    = (uint8_t)getInt("s6w", c.s6_width);
-  c.s6_gap      = (uint8_t)getInt("s6g", c.s6_gap);
-  c.s6_shrink   = (uint8_t)getInt("s6sh", c.s6_shrink);
-  c.s6_fill     = getFloat("s6fill", c.s6_fill);
-  c.s6_segMin   = (uint8_t)getInt("s6min", c.s6_segMin);
-  c.s6_segMax   = (uint8_t)getInt("s6max", c.s6_segMax);
-  c.s6_segHeight = (uint8_t)getInt("s6segH", c.s6_segHeight);
-  c.s6_segGap   = (uint8_t)getInt("s6segG", c.s6_segGap);
-  c.s6_showPeaks = getBool("s6peaks");
-  c.s6_barBrightness = (uint8_t)getInt("s6barBrightness", c.s6_barBrightness);
-  c.s6_peakBrightness = (uint8_t)getInt("s6peakBrightness", c.s6_peakBrightness);
-  c.s6_smoothness = (uint8_t)getInt("s6smooth", c.s6_smoothness);
-
-  // Styl 7 (Okrągły)
-  c.s7_circleRadius = (uint8_t)getInt("s7radius", c.s7_circleRadius);
-  c.s7_circleGap = (uint8_t)getInt("s7gap", c.s7_circleGap);
-  c.s7_filled = getBool("s7filled");
-  c.s7_maxHeight = (uint8_t)getInt("s7max", c.s7_maxHeight);
-
-  // Styl 8 (Liniowy)
-  c.s8_lineThickness = (uint8_t)getInt("s8thick", c.s8_lineThickness);
-  c.s8_lineGap = (uint8_t)getInt("s8gap", c.s8_lineGap);
-  c.s8_gradient = getBool("s8grad");
-  c.s8_maxHeight = (uint8_t)getInt("s8max", c.s8_maxHeight);
-
-  // Styl 9 (Gwiazda 6-ramienna)
-  c.s9_starRadius = (uint8_t)getInt("s9radius", c.s9_starRadius);
-  c.s9_armWidth = (uint8_t)getInt("s9armw", c.s9_armWidth);
-  c.s9_armLength = (uint8_t)getInt("s9arml", c.s9_armLength);
-  c.s9_spikeLength = (uint8_t)getInt("s9spike", c.s9_spikeLength);
-  c.s9_showSpikes = getBool("s9spikes");
-  c.s9_filled = getBool("s9filled");
-  c.s9_centerSize = (uint8_t)getInt("s9center", c.s9_centerSize);
-  c.s9_smoothness = (uint8_t)getInt("s9smooth", c.s9_smoothness);
-
-  // Styl 10 (Floating Peaks - Ulatujące szczyty)
-  c.s10_barWidth = (uint8_t)getInt("s10barw", c.s10_barWidth);
-  c.s10_barGap = (uint8_t)getInt("s10gap", c.s10_barGap);
-  c.s10_segmentHeight = (uint8_t)getInt("s10segh", c.s10_segmentHeight);
-  c.s10_segmentGap = (uint8_t)getInt("s10segg", c.s10_segmentGap);
-  c.s10_maxPeaks = (uint8_t)getInt("s10maxp", c.s10_maxPeaks);
-  c.s10_peakHoldTime = (uint8_t)getInt("s10hold", c.s10_peakHoldTime);
-  c.s10_peakFloatSpeed = (uint8_t)getInt("s10speed", c.s10_peakFloatSpeed);
-  c.s10_peakFadeSteps = (uint8_t)getInt("s10fade", c.s10_peakFadeSteps);
-  c.s10_trailLength = (uint8_t)getInt("s10trail", c.s10_trailLength);
-  c.s10_showTrails = getBool("s10trails");
-  c.s10_smoothness = (uint8_t)getInt("s10smooth", c.s10_smoothness);
-  c.s10_barBrightness = (uint8_t)getInt("s10barbr", c.s10_barBrightness);
-  c.s10_peakBrightness = (uint8_t)getInt("s10peakbr", c.s10_peakBrightness);
-  c.s10_trailBrightness = (uint8_t)getInt("s10trailbr", c.s10_trailBrightness);
-  c.s10_peakMinHeight = (uint8_t)getInt("s10minh", c.s10_peakMinHeight);
-  c.s10_floatHeight = (uint8_t)getInt("s10floath", c.s10_floatHeight);
-  c.s10_enableAnimation = getBool("s10anim");
-
-  // Globalne ustawienia
-  uint16_t oldPeakHold = c.peakHoldTimeMs;
-  c.peakHoldTimeMs = (uint16_t)getInt("peakHoldMs", c.peakHoldTimeMs);
-  Serial.printf("DEBUG WEB: Nowe wartości do zapisania: s5w=%u, s5g=%u, s6w=%u\n", 
-                c.s5_barWidth, c.s5_barGap, c.s6_width);
-
-  Serial.println("DEBUG WEB: Wywołuję analyzerSetStyle()...");
-  analyzerSetStyle(c);
-  
-  // Zapisz do pliku w main.cpp (gdzie STORAGE jest poprawnie zainicjalizowany)
-  Serial.println("DEBUG WEB: Zapisuję do pliku analyzer.cfg...");
-  String content = analyzerStyleToSaveString();
-  
-  // Usuń stary plik
-  if (STORAGE.exists("/analyzer.cfg")) {
-    STORAGE.remove("/analyzer.cfg");
-  }
-  
-  File f = STORAGE.open("/analyzer.cfg", FILE_WRITE);
-  if (f) {
-    f.print(content);
-    f.flush();
-    f.close();
-    Serial.printf("DEBUG WEB: Zapisano %u bajtów do analyzer.cfg\n", content.length());
-  } else {
-    Serial.println("ERROR WEB: Nie można otworzyć analyzer.cfg do zapisu!");
-  }
-  
-  Serial.println("DEBUG WEB: Zapis zakończony - redirect do /analyzer");
-
-  request->redirect("/analyzer");
-});
-
-// Live podgląd: stosuje parametry od razu (bez zapisu)
-server.on("/analyzerApply", HTTP_POST, [](AsyncWebServerRequest *request){
-  AnalyzerStyleCfg c = analyzerGetStyle();
-
-  auto getInt = [&](const char* n, int def)->int {
-    if(!request->hasParam(n, true)) return def;
-    return request->getParam(n, true)->value().toInt();
-  };
-  auto getFloat = [&](const char* n, float def)->float {
-    if(!request->hasParam(n, true)) return def;
-    return request->getParam(n, true)->value().toFloat();
-  };
-  auto getBool = [&](const char* n)->bool {
-    return request->hasParam(n, true) && request->getParam(n, true)->value() == "1";
-  };
-
-  // Styl 5
-  c.s5_barWidth = (uint8_t)getInt("s5w", c.s5_barWidth);
-  c.s5_barGap   = (uint8_t)getInt("s5g", c.s5_barGap);
-  c.s5_segments = (uint8_t)getInt("s5seg", c.s5_segments);
-  c.s5_segHeight = (uint8_t)getInt("s5segH", c.s5_segHeight);
-  c.s5_fill     = getFloat("s5fill", c.s5_fill);
-  c.s5_peakHeight = (uint8_t)getInt("s5peakH", c.s5_peakHeight);
-  c.s5_peakGap = (uint8_t)getInt("s5peakG", c.s5_peakGap);
-  c.s5_showPeaks = getBool("s5peaks");
-  c.s5_barBrightness = (uint8_t)getInt("s5barBrightness", c.s5_barBrightness);
-  c.s5_peakBrightness = (uint8_t)getInt("s5peakBrightness", c.s5_peakBrightness);
-  c.s5_smoothness = (uint8_t)getInt("s5smooth", c.s5_smoothness);
-
-  // Styl 6
-  c.s6_width    = (uint8_t)getInt("s6w", c.s6_width);
-  c.s6_gap      = (uint8_t)getInt("s6g", c.s6_gap);
-  c.s6_shrink   = (uint8_t)getInt("s6sh", c.s6_shrink);
-  c.s6_fill     = getFloat("s6fill", c.s6_fill);
-  c.s6_segMin   = (uint8_t)getInt("s6min", c.s6_segMin);
-  c.s6_segMax   = (uint8_t)getInt("s6max", c.s6_segMax);
-  c.s6_segHeight = (uint8_t)getInt("s6segH", c.s6_segHeight);
-  c.s6_segGap   = (uint8_t)getInt("s6segG", c.s6_segGap);
-  c.s6_showPeaks = getBool("s6peaks");
-  c.s6_barBrightness = (uint8_t)getInt("s6barBrightness", c.s6_barBrightness);
-  c.s6_peakBrightness = (uint8_t)getInt("s6peakBrightness", c.s6_peakBrightness);
-  c.s6_smoothness = (uint8_t)getInt("s6smooth", c.s6_smoothness);
-
-  // Styl 7 (Okrągły)
-  c.s7_circleRadius = (uint8_t)getInt("s7radius", c.s7_circleRadius);
-  c.s7_circleGap = (uint8_t)getInt("s7gap", c.s7_circleGap);
-  c.s7_filled = getBool("s7filled");
-  c.s7_maxHeight = (uint8_t)getInt("s7max", c.s7_maxHeight);
-
-  // Styl 8 (Liniowy)
-  c.s8_lineThickness = (uint8_t)getInt("s8thick", c.s8_lineThickness);
-  c.s8_lineGap = (uint8_t)getInt("s8gap", c.s8_lineGap);
-  c.s8_gradient = getBool("s8grad");
-  c.s8_maxHeight = (uint8_t)getInt("s8max", c.s8_maxHeight);
-
-  // Styl 9 (Gwiazda 6-ramienna)
-  c.s9_starRadius = (uint8_t)getInt("s9radius", c.s9_starRadius);
-  c.s9_armWidth = (uint8_t)getInt("s9armw", c.s9_armWidth);
-  c.s9_armLength = (uint8_t)getInt("s9arml", c.s9_armLength);
-  c.s9_spikeLength = (uint8_t)getInt("s9spike", c.s9_spikeLength);
-  c.s9_showSpikes = getBool("s9spikes");
-  c.s9_filled = getBool("s9filled");
-  c.s9_centerSize = (uint8_t)getInt("s9center", c.s9_centerSize);
-  c.s9_smoothness = (uint8_t)getInt("s9smooth", c.s9_smoothness);
-
-  // Styl 10 (Floating Peaks - Ulatujące szczyty)
-  c.s10_barWidth = (uint8_t)getInt("s10barw", c.s10_barWidth);
-  c.s10_barGap = (uint8_t)getInt("s10gap", c.s10_barGap);
-  c.s10_segmentHeight = (uint8_t)getInt("s10segh", c.s10_segmentHeight);
-  c.s10_segmentGap = (uint8_t)getInt("s10segg", c.s10_segmentGap);
-  c.s10_maxPeaks = (uint8_t)getInt("s10maxp", c.s10_maxPeaks);
-  c.s10_peakHoldTime = (uint8_t)getInt("s10hold", c.s10_peakHoldTime);
-  c.s10_peakFloatSpeed = (uint8_t)getInt("s10speed", c.s10_peakFloatSpeed);
-  c.s10_peakFadeSteps = (uint8_t)getInt("s10fade", c.s10_peakFadeSteps);
-  c.s10_trailLength = (uint8_t)getInt("s10trail", c.s10_trailLength);
-  c.s10_showTrails = getBool("s10trails");
-  c.s10_smoothness = (uint8_t)getInt("s10smooth", c.s10_smoothness);
-  c.s10_barBrightness = (uint8_t)getInt("s10barbr", c.s10_barBrightness);
-  c.s10_peakBrightness = (uint8_t)getInt("s10peakbr", c.s10_peakBrightness);
-  c.s10_trailBrightness = (uint8_t)getInt("s10trailbr", c.s10_trailBrightness);
-  c.s10_peakMinHeight = (uint8_t)getInt("s10minh", c.s10_peakMinHeight);
-  c.s10_floatHeight = (uint8_t)getInt("s10floath", c.s10_floatHeight);
-  c.s10_enableAnimation = getBool("s10anim");
-  
-  // Globalne ustawienia
-  uint16_t oldPeakHold = c.peakHoldTimeMs;
-  c.peakHoldTimeMs = (uint16_t)getInt("peakHoldMs", c.peakHoldTimeMs);
-  Serial.printf("DEBUG WEB: Analyzer apply - peakHoldMs: %u -> %u\n", oldPeakHold, c.peakHoldTimeMs);
-
-  analyzerSetStyle(c);
-  request->send(200, "text/plain", "OK");
-});
-
-// (opcjonalnie) podejrzyj aktualne wartości w JSON
-server.on("/analyzerCfg", HTTP_GET, [](AsyncWebServerRequest *request){
-  request->send(200, "application/json", analyzerStyleToJson());
-});
-
-// Diagnostyka analizatora - pełna strona HTML z informacjami o pliku
-server.on("/analyzerDiag", HTTP_GET, [](AsyncWebServerRequest *request){
-  String html = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
-  html += "<title>Analyzer Diagnostics</title>";
-  html += "<style>body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff}";
-  html += ".box{border:1px solid #4CAF50;border-radius:10px;padding:15px;margin:10px 0;background:#2a2a2a}";
-  html += "pre{background:#333;padding:10px;border-radius:5px;overflow-x:auto;font-size:12px;max-height:300px}";
-  html += ".ok{color:#4CAF50}.err{color:#f44336}.warn{color:#ff9800}";
-  html += "button{padding:10px 20px;margin:5px;border:0;border-radius:5px;background:#4CAF50;color:#fff;cursor:pointer}";
-  html += "button:hover{background:#45a049}</style></head><body>";
-  html += "<h1>Diagnostyka Analyzer Config</h1>";
-  
-  // Status wczytania przy starcie
-  html += "<div class='box'><h3>Status wczytania przy starcie</h3>";
-  String loadStatus = analyzerGetLoadStatus();
-  int loadedParams = analyzerGetLoadedParamsCount();
-  if (loadStatus.startsWith("OK")) {
-    html += "<p class='ok'>✓ " + loadStatus + "</p>";
-  } else if (loadStatus.startsWith("BŁĄD") || loadStatus.startsWith("ERROR")) {
-    html += "<p class='err'>❌ " + loadStatus + "</p>";
-  } else {
-    html += "<p class='warn'>⚠ " + loadStatus + "</p>";
-  }
-  html += "</div>";
-  
-  // Sprawdź czy karta SD jest dostępna
-  html += "<div class='box'><h3>Status karty SD</h3>";
-  if (noSDcard) {
-    html += "<p class='err'>❌ Karta SD niedostępna!</p>";
-  } else {
-    html += "<p class='ok'>✓ Karta SD OK</p>";
-  }
-  html += "</div>";
-  
-  // Sprawdź plik analyzer.cfg
-  html += "<div class='box'><h3>Plik /analyzer.cfg</h3>";
-  if (STORAGE.exists("/analyzer.cfg")) {
-    File f = STORAGE.open("/analyzer.cfg", FILE_READ);
-    if (f) {
-      html += "<p class='ok'>✓ Plik istnieje (rozmiar: " + String(f.size()) + " bajtów)</p>";
-      html += "<h4>Zawartość pliku:</h4><pre>";
-      int lineCount = 0;
-      while (f.available()) {
-        String line = f.readStringUntil('\n');
-        line.replace("&", "&amp;");
-        line.replace("<", "&lt;");
-        line.replace(">", "&gt;");
-        html += line + "\n";
-        lineCount++;
-      }
-      html += "</pre>";
-      html += "<p>Liczba linii: " + String(lineCount) + "</p>";
-      f.close();
+    
+    // =============== INICJALIZACJA MODUŁÓW - FULL INTEGRATION ===============
+    Serial.println("DEBUG: Initializing integrated modules...");
+    
+    // 2. Analyzer - analizator spektrum FFT
+    Serial.println("DEBUG: Initializing FFT Analyzer...");
+    if (eq_analyzer_init()) {
+        Serial.println("DEBUG: FFT Analyzer initialized successfully");
+        eq_analyzer_set_enabled(analyzerEnabled);  // Domyślnie wyłączony
     } else {
-      html += "<p class='err'>❌ Nie można otworzyć pliku do odczytu!</p>";
-    }
-  } else {
-    html += "<p class='warn'>⚠ Plik nie istnieje - zostanie utworzony przy pierwszym zapisie</p>";
-  }
-  html += "</div>";
-  
-  // Aktualne wartości w pamięci
-  AnalyzerStyleCfg cfg = analyzerGetStyle();
-  html += "<div class='box'><h3>Aktualne wartości w pamięci (RAM)</h3>";
-  html += "<pre>";
-  html += "peakHoldTimeMs = " + String(cfg.peakHoldTimeMs) + "\n";
-  html += "--- Styl 5 ---\n";
-  html += "s5_barWidth = " + String(cfg.s5_barWidth) + "\n";
-  html += "s5_barGap = " + String(cfg.s5_barGap) + "\n";
-  html += "s5_segments = " + String(cfg.s5_segments) + "\n";
-  html += "s5_segHeight = " + String(cfg.s5_segHeight) + "\n";
-  html += "s5_peakHeight = " + String(cfg.s5_peakHeight) + "\n";
-  html += "s5_peakGap = " + String(cfg.s5_peakGap) + "\n";
-  html += "--- Styl 6 ---\n";
-  html += "s6_width = " + String(cfg.s6_width) + "\n";
-  html += "s6_gap = " + String(cfg.s6_gap) + "\n";
-  html += "s6_segHeight = " + String(cfg.s6_segHeight) + "\n";
-  html += "s6_segGap = " + String(cfg.s6_segGap) + "\n";
-  html += "--- Styl 10 ---\n";
-  html += "s10_barWidth = " + String(cfg.s10_barWidth) + "\n";
-  html += "s10_barGap = " + String(cfg.s10_barGap) + "\n";
-  html += "s10_segmentHeight = " + String(cfg.s10_segmentHeight) + "\n";
-  html += "s10_maxPeaks = " + String(cfg.s10_maxPeaks) + "\n";
-  html += "s10_enableAnimation = " + String(cfg.s10_enableAnimation ? "true" : "false") + "\n";
-  html += "</pre></div>";
-  
-  // Przyciski akcji
-  html += "<div class='box'><h3>Akcje</h3>";
-  html += "<form action='/analyzerSaveForce' method='POST' style='display:inline'>";
-  html += "<button type='submit'>Wymuś zapis do pliku</button></form> ";
-  html += "<form action='/analyzerCreateFile' method='POST' style='display:inline'>";
-  html += "<button type='submit' style='background:#ff9800'>Nadpisz plik (pełny zapis)</button></form> ";
-  html += "<form action='/analyzerReload' method='POST' style='display:inline'>";
-  html += "<button type='submit'>Wczytaj ponownie z pliku</button></form> ";
-  html += "<a href='/analyzer'><button type='button'>Powrót do /analyzer</button></a>";
-  html += "</div>";
-  
-  html += "</body></html>";
-  request->send(200, "text/html", html);
-});
-
-// Wymuś zapis konfiguracji z informacją o wyniku
-server.on("/analyzerSaveForce", HTTP_POST, [](AsyncWebServerRequest *request){
-  String result = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Zapis</title>";
-  result += "<style>body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff}</style></head><body>";
-  result += "<h2>Próba zapisu analyzer.cfg</h2>";
-  
-  if (noSDcard) {
-    result += "<p style='color:red'>BŁĄD: Karta SD niedostępna!</p>";
-  } else {
-    // Usuń stary plik
-    if (STORAGE.exists("/analyzer.cfg")) {
-      STORAGE.remove("/analyzer.cfg");
+        Serial.println("WARNING: FFT Analyzer initialization failed");
     }
     
-    // Zapisz używając String
-    String content = analyzerStyleToSaveString();
-    File f = STORAGE.open("/analyzer.cfg", FILE_WRITE);
-    if (!f) {
-      result += "<p style='color:red'>BŁĄD: Nie można otworzyć pliku do zapisu!</p>";
-    } else {
-      f.print(content);
-      f.flush();
-      f.close();
-      
-      // Sprawdź czy plik istnieje
-      if (STORAGE.exists("/analyzer.cfg")) {
-        File check = STORAGE.open("/analyzer.cfg", FILE_READ);
-        result += "<p style='color:green'>✓ SUKCES! Plik utworzony, rozmiar: " + String(check.size()) + " bajtów</p>";
-        check.close();
-      } else {
-        result += "<p style='color:red'>BŁĄD: Plik nie został utworzony mimo braku błędów!</p>";
-      }
-    }
-  }
-  
-  result += "<br><a href='/analyzerDiag'>Powrót do diagnostyki</a>";
-  result += "</body></html>";
-  request->send(200, "text/html", result);
-});
-
-// Utwórz plik z domyślnymi wartościami
-server.on("/analyzerCreateFile", HTTP_POST, [](AsyncWebServerRequest *request){
-  String result = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Tworzenie pliku</title>";
-  result += "<style>body{font-family:Arial;margin:20px;background:#1a1a1a;color:#fff}pre{background:#333;padding:10px;border-radius:5px;overflow-x:auto;max-height:400px}</style></head><body>";
-  result += "<h2>Tworzenie pliku analyzer.cfg</h2>";
-  
-  if (noSDcard) {
-    result += "<p style='color:red'>BŁĄD: Karta SD niedostępna!</p>";
-  } else {
-    // TEST: Najpierw spróbuj utworzyć prosty plik testowy
-    result += "<h3>Test zapisu na kartę SD:</h3>";
-    File testFile = STORAGE.open("/test_write.txt", FILE_WRITE);
-    if (testFile) {
-      testFile.println("Test zapisu");
-      testFile.close();
-      if (STORAGE.exists("/test_write.txt")) {
-        result += "<p style='color:green'>✓ Test zapisu OK - karta SD jest zapisywalna</p>";
-        STORAGE.remove("/test_write.txt"); // Usuń plik testowy
-      } else {
-        result += "<p style='color:red'>❌ Test zapisu FAILED - plik nie powstał mimo że open() zwróciło sukces!</p>";
-      }
-    } else {
-      result += "<p style='color:red'>❌ Test zapisu FAILED - nie można otworzyć pliku testowego do zapisu!</p>";
-      result += "<p>Możliwe przyczyny: karta SD jest tylko do odczytu, pełna, lub uszkodzona</p>";
-    }
+    // 4. BTWebUI - moduł Bluetooth
+    // Używa wrapper functions - registerHandlers wywołany już wcześniej w konfiguracji serwera
+    Serial.println("DEBUG: Bluetooth module initialized via wrapper functions");
     
-    // Próba bezpośredniego zapisu analyzer.cfg
-    result += "<h3>Tworzenie analyzer.cfg:</h3>";
+    Serial.println("DEBUG: All modules initialized");
+    // =====================================================================
     
-    // Usuń stary plik jeśli istnieje
-    if (STORAGE.exists("/analyzer.cfg")) {
-      result += "<p>Plik już istnieje - usuwam...</p>";
-      bool removed = STORAGE.remove("/analyzer.cfg");
-      result += removed ? "<p style='color:green'>✓ Usunięto</p>" : "<p style='color:red'>❌ Nie udało się usunąć!</p>";
-    }
-    
-    // Bezpośredni zapis pliku (nie przez analyzerStyleSave)
-    File f = STORAGE.open("/analyzer.cfg", FILE_WRITE);
-    if (!f) {
-      result += "<p style='color:red'>❌ Nie można otworzyć /analyzer.cfg do zapisu!</p>";
-    } else {
-      result += "<p style='color:green'>✓ Plik otwarty do zapisu</p>";
-      
-      // Pobierz aktualne wartości
-      AnalyzerStyleCfg cfg = analyzerGetStyle();
-      
-      // Zapisz
-      f.println("# Analyzer style cfg");
-      f.print("peakHoldMs="); f.println(cfg.peakHoldTimeMs);
-      f.print("s5w="); f.println(cfg.s5_barWidth);
-      f.print("s5g="); f.println(cfg.s5_barGap);
-      f.print("s5seg="); f.println(cfg.s5_segments);
-      f.print("s5fill="); f.println(cfg.s5_fill, 3);
-      f.print("s5segH="); f.println(cfg.s5_segHeight);
-      f.print("s5peakH="); f.println(cfg.s5_peakHeight);
-      f.print("s5peakG="); f.println(cfg.s5_peakGap);
-      f.print("s5peaks="); f.println(cfg.s5_showPeaks ? 1 : 0);
-      f.print("s5smooth="); f.println(cfg.s5_smoothness);
-      f.print("s5barBrightness="); f.println(cfg.s5_barBrightness);
-      f.print("s5peakBrightness="); f.println(cfg.s5_peakBrightness);
-      f.print("s6w="); f.println(cfg.s6_width);
-      f.print("s6g="); f.println(cfg.s6_gap);
-      f.print("s6sh="); f.println(cfg.s6_shrink);
-      f.print("s6fill="); f.println(cfg.s6_fill, 3);
-      f.print("s6min="); f.println(cfg.s6_segMin);
-      f.print("s6max="); f.println(cfg.s6_segMax);
-      f.print("s6segH="); f.println(cfg.s6_segHeight);
-      f.print("s6segG="); f.println(cfg.s6_segGap);
-      f.print("s6peaks="); f.println(cfg.s6_showPeaks ? 1 : 0);
-      f.print("s6smooth="); f.println(cfg.s6_smoothness);
-      f.print("s6barBrightness="); f.println(cfg.s6_barBrightness);
-      f.print("s6peakBrightness="); f.println(cfg.s6_peakBrightness);
-      f.print("s7radius="); f.println(cfg.s7_circleRadius);
-      f.print("s7gap="); f.println(cfg.s7_circleGap);
-      f.print("s7filled="); f.println(cfg.s7_filled ? 1 : 0);
-      f.print("s7max="); f.println(cfg.s7_maxHeight);
-      f.print("s8thick="); f.println(cfg.s8_lineThickness);
-      f.print("s8gap="); f.println(cfg.s8_lineGap);
-      f.print("s8grad="); f.println(cfg.s8_gradient ? 1 : 0);
-      f.print("s8max="); f.println(cfg.s8_maxHeight);
-      f.print("s9radius="); f.println(cfg.s9_starRadius);
-      f.print("s9armw="); f.println(cfg.s9_armWidth);
-      f.print("s9arml="); f.println(cfg.s9_armLength);
-      f.print("s9spike="); f.println(cfg.s9_spikeLength);
-      f.print("s9spikes="); f.println(cfg.s9_showSpikes ? 1 : 0);
-      f.print("s9filled="); f.println(cfg.s9_filled ? 1 : 0);
-      f.print("s9center="); f.println(cfg.s9_centerSize);
-      f.print("s9smooth="); f.println(cfg.s9_smoothness);
-      f.print("s10barw="); f.println(cfg.s10_barWidth);
-      f.print("s10gap="); f.println(cfg.s10_barGap);
-      f.print("s10segh="); f.println(cfg.s10_segmentHeight);
-      f.print("s10segg="); f.println(cfg.s10_segmentGap);
-      f.print("s10maxp="); f.println(cfg.s10_maxPeaks);
-      f.print("s10hold="); f.println(cfg.s10_peakHoldTime);
-      f.print("s10speed="); f.println(cfg.s10_peakFloatSpeed);
-      f.print("s10fade="); f.println(cfg.s10_peakFadeSteps);
-      f.print("s10trail="); f.println(cfg.s10_trailLength);
-      f.print("s10trails="); f.println(cfg.s10_showTrails ? 1 : 0);
-      f.print("s10smooth="); f.println(cfg.s10_smoothness);
-      f.print("s10barbr="); f.println(cfg.s10_barBrightness);
-      f.print("s10peakbr="); f.println(cfg.s10_peakBrightness);
-      f.print("s10trailbr="); f.println(cfg.s10_trailBrightness);
-      f.print("s10minh="); f.println(cfg.s10_peakMinHeight);
-      f.print("s10floath="); f.println(cfg.s10_floatHeight);
-      f.print("s10anim="); f.println(cfg.s10_enableAnimation ? 1 : 0);
-      
-      f.flush();
-      size_t written = f.size();
-      f.close();
-      
-      result += "<p>Zapisano " + String(written) + " bajtów</p>";
-    }
-    
-    // Weryfikacja
-    if (STORAGE.exists("/analyzer.cfg")) {
-      File check = STORAGE.open("/analyzer.cfg", FILE_READ);
-      result += "<p style='color:green'>✓ SUKCES! Plik utworzony pomyślnie!</p>";
-      result += "<p>Rozmiar: " + String(check.size()) + " bajtów</p>";
-      result += "<h3>Zawartość:</h3><pre>";
-      int lineCount = 0;
-      while (check.available()) {
-        result += check.readStringUntil('\n') + "\n";
-        lineCount++;
-      }
-      result += "</pre>";
-      result += "<p>Liczba linii: " + String(lineCount) + "</p>";
-      check.close();
-      
-      // Wczytaj nowo utworzony plik do pamięci
-      analyzerStyleLoad();
-      result += "<p style='color:green'>✓ Ustawienia wczytane do pamięci RAM</p>";
-    } else {
-      result += "<p style='color:red'>❌ BŁĄD: Plik nie został zapisany!</p>";
-    }
-  }
-  
-  result += "<br><a href='/analyzerDiag'>Powrót do diagnostyki</a>";
-  result += "<br><a href='/analyzer'>Powrót do ustawień</a>";
-  result += "</body></html>";
-  request->send(200, "text/html", result);
-});
-
-// Wczytaj ponownie konfigurację z pliku
-server.on("/analyzerReload", HTTP_POST, [](AsyncWebServerRequest *request){
-  Serial.println("DEBUG: /analyzerReload - wczytywanie z pliku...");
-  File cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
-  if (cfgFile) {
-    String content = cfgFile.readString();
-    cfgFile.close();
-    Serial.printf("DEBUG: Odczytano %u bajtów z analyzer.cfg\n", content.length());
-    analyzerStyleLoadFromString(content);
-  } else {
-    Serial.println("DEBUG: analyzer.cfg nie istnieje - używam domyślnych");
-    analyzerStyleLoad();
-  }
-  request->redirect("/analyzerDiag");
-});
-
-// Diagnostic endpoint - pokazuje zawartość pliku analyzer.cfg
-server.on("/analyzerDebug", HTTP_GET, [](AsyncWebServerRequest *request){
-  String response = "<html><head><meta charset='UTF-8'></head><body>";
-  response += "<h1>Analyzer Config Debug</h1>";
-  
-  File cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
-  if (cfgFile) {
-    size_t fileSize = cfgFile.size();
-    response += "<p><b>Plik istnieje:</b> TAK</p>";
-    response += "<p><b>Rozmiar:</b> " + String(fileSize) + " bajtów</p>";
-    response += "<h2>Zawartość pliku:</h2><pre>";
-    response += cfgFile.readString();
-    response += "</pre>";
-    cfgFile.close();
-    
-    // Teraz przeładuj z logami
-    response += "<h2>Ponowne ładowanie z Serial logs...</h2>";
-    Serial.println("\n*** MANUAL RELOAD FROM /analyzerDebug ***");
-    cfgFile = STORAGE.open("/analyzer.cfg", FILE_READ);
-    if (cfgFile) {
-      String content = cfgFile.readString();
-      cfgFile.close();
-      Serial.printf("DEBUG: Odczytano %u bajtów z analyzer.cfg\n", content.length());
-      analyzerStyleLoadFromString(content);
-      response += "<p>Zobacz Serial Monitor dla szczegółowych logów!</p>";
-    }
-    Serial.println("*** RELOAD COMPLETE ***\n");
-  } else {
-    response += "<p><b>Plik istnieje:</b> NIE</p>";
-    response += "<p>ERROR: Nie można otworzyć /analyzer.cfg</p>";
-  }
-  
-  response += "<p><a href='/analyzer'>Powrót do Analyzer</a></p>";
-  response += "</body></html>";
-  request->send(200, "text/html", response);
-});
-
-// Test manual save - wywołuje analyzerStyleSave() z Serial logs
-server.on("/analyzerTestSave", HTTP_GET, [](AsyncWebServerRequest *request){
-  Serial.println("\n*** MANUAL SAVE TEST FROM /analyzerTestSave ***");
-  analyzerStyleSave();
-  Serial.println("*** SAVE TEST COMPLETE ***\n");
-  
-  request->send(200, "text/plain", "Test save complete - check Serial Monitor for logs!");
-});
-
-// Test generator toggle
-server.on("/analyzerTest", HTTP_GET, [](AsyncWebServerRequest *request){
-  bool currentState = false; // Należy dodać getter dla stanu test generatora
-  eq_analyzer_enable_test_generator(!currentState);
-  String status = currentState ? "Test generator DISABLED" : "Test generator ENABLED";
-  request->send(200, "text/plain", status);
-});
-
-// Obsługa presetów
-server.on("/analyzerPreset", HTTP_POST, [](AsyncWebServerRequest *request){
-  if (request->hasParam("preset", true)) {
-    uint8_t presetId = request->getParam("preset", true)->value().toInt();
-    analyzerApplyPreset(presetId);
-    analyzerStyleSave();
-  }
-  request->redirect("/analyzer");
-});
-
-// -----------------------------------------------------------------------------------------
-
-server.begin();
+    server.begin();
     currentSelection = station_nr - 1; // ustawiamy stacje na liscie na obecnie odtwarzaczną przy starcie radia
     firstVisibleLine = currentSelection + 1; // pierwsza widoczna lina to grająca stacja przy starcie
     if (currentSelection + 1 >= stationsCount - 1) 
     {
       firstVisibleLine = currentSelection - 3;
     }  
-    displayRadio();
+    if (!sdPlayerOLEDActive) displayRadio(); // Blokuj gdy SDPlayer aktywny
     ActionNeedUpdateTime = true;
     
     //fadeInVolume
   } 
   else 
   {
-    Serial.println("Brak połączenia z siecią WiFi");  // W przypadku braku polaczenia wifi - wyslij komunikat na serial
+    // PUNKT 2: POWER ON BEZ WiFi - radio może działać w trybie offline (tylko SD Player)
+    Serial.println("[WiFi] ✗ Brak połączenia z siecią WiFi - OFFLINE MODE");
+    Serial.println("[WiFi] Możliwe przyczyny:");
+    Serial.println("  - Router WiFi wyłączony lub poza zasięgiem");
+    Serial.println("  - Zmieniono nazwę sieci (SSID) lub hasło");
+    Serial.println("  - Zbyt słaby sygnał WiFi");
+    Serial.println("[WiFi] ℹ Radio działa w trybie OFFLINE - SD Player dostępny");
+    Serial.println("[WiFi] ℹ Portal konfiguracyjny: SSID=EVO-Radio, IP=192.168.4.1");
+    
+    // Wyświetl komunikat na OLED
     u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_fub14_tf);
+    u8g2.drawStr(10, 20, "OFFLINE MODE");
     u8g2.setFont(spleen6x12PL);
-    u8g2.drawStr(5, 13, "No network connection");  // W przypadku braku polaczenia wifi - wyswietl komunikat na wyswietlaczu OLED
-    u8g2.drawStr(5, 26, "Connect to WiFi: ESP Internet Radio");
-    u8g2.drawStr(5, 39, "Open web page http://192.168.4.1");
+    u8g2.drawStr(5, 35, "No WiFi connection");
+    u8g2.drawStr(5, 48, "SD Player available");
+    u8g2.drawStr(5, 61, "Use encoder to activate");
     u8g2.sendBuffer();
-    while(true)
-    { 
-      wifiManager.process(); 
     
-
-      /*---------------------  FUNKCJA PILOT IR w trybie BRAK WiFI ---------------------*/ 
-      if (bit_count == 32) // sprawdzamy czy odczytalismy w przerwaniu pełne 32 bity kodu IR NEC
-      {
-        if (ir_code != 0) // sprawdzamy czy zmienna ir_code nie jest równa 0
-        {
-          
-          detachInterrupt(recv_pin);            // Rozpinamy przerwanie
-          Serial.print("debug IR -> Kod NEC OK:");
-          Serial.print(ir_code, HEX);
-          ir_code = reverse_bits(ir_code,32);   // Rotacja bitów - zmiana porządku z LSB-MSB na MSB-LSB
-          Serial.print("  MSB-LSB: ");
-          Serial.print(ir_code, HEX);
-        
-          uint8_t CMD = (ir_code >> 16) & 0xFF; // Drugi bajt (inwersja adresu)
-          uint8_t ADDR = ir_code & 0xFF;        // Czwarty bajt (inwersja komendy)
-          
-          Serial.print("  ADR:");
-          Serial.print(ADDR, HEX);
-          Serial.print(" CMD:");
-          Serial.println(CMD, HEX);
-          ir_code = ADDR << 8 | CMD;      // Łączymy ADDR i CMD w jedną zmienną 0x ADR CMD
-
-          // Info o przebiegach czasowytch kodu pilota IR
-          Serial.print("debug IR -> puls 9ms:"); 
-          Serial.print(pulse_duration_9ms);
-          Serial.print("  4.5ms:");
-          Serial.print(pulse_duration_4_5ms);
-          Serial.print("  1690us:");
-          Serial.print(pulse_duration_1690us);
-          Serial.print("  560us:");
-          Serial.println(pulse_duration_560us);
-
-          fwupd = false;        // Kasujemy flagę aktulizacji OTA gdyby była ustawiona
-          displayPowerSave(0);
-          
-          if (ir_code == rcCmdPower) 
-          {     
-            //prePowerOff();
-            powerOff();
-          }
-          else if (ir_code == rcCmdBack)
-          {
-            displayCenterBigText("RESTART",36);
-            delay(2000);
-            REG_WRITE(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_SW_SYS_RST); // Restart pełen sprzętowy jak z przycisku reset
-          }
-                    
-          else { Serial.println("Inny przycisk"); }
-        }
-        else
-        {
-          Serial.println("Błąd - kod pilota NEC jest niepoprawny!");
-          Serial.print("debug-- puls 9ms:");
-          Serial.print(pulse_duration_9ms);
-          Serial.print("  4.5ms:");
-          Serial.print(pulse_duration_4_5ms);
-          Serial.print("  1690us:");
-          Serial.print(pulse_duration_1690us);
-          Serial.print("  560us:");
-          Serial.println(pulse_duration_560us);    
-        }
-        ir_code = 0;
-        bit_count = 0;
-        attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);  
-      } 
-
-      /*---------------------  FUNKCJA INFORMACJA O PODLACZENI i RESET ---------------------*/ 
-      if (WiFi.status() == WL_CONNECTED)
-      {
-        displayCenterBigText("CONNECTED",36);
-        currentIP = WiFi.localIP().toString();
-        showIP(1,55);
-        u8g2.drawStr(1, 63, "Reseting...");
-        u8g2.sendBuffer();
-        delay(2000);
-        REG_WRITE(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_SW_SYS_RST); // Restart pełen sprzętowy jak z przycisku reset
-      }
+    // Inicjalizacja timerów (potrzebne dla loop())
+    timer1.attach(0.5, updateTimerFlag);
+    timer2.attach(1, displayDimmerTimer);
     
-    } // Nieskonczona petla z procesowaniem Wifi aby nie przejsc do ekranu radia gdy nie ma Wifi
+    // Auto-start SD Player jeśli był aktywny przed wyłączeniem
+    if (shouldAutoStartSDPlayer && g_sdPlayerOLED) {
+      delay(2000); // Pokaż komunikat przez 2 sekundy
+      Serial.println("[OFFLINE] Auto-starting SD Player...");
+      g_sdPlayerOLED->activate();
+      sdPlayerOLEDActive = true;
+    }
+    
+    Serial.println("[OFFLINE] Setup completed - entering main loop");
+    // NIE UŻYWAMY while(true) - pozwalamy kodowi przejść do loop() gdzie SD Player działa
+  }
+}
+
+// #######################################################################################  LOOP  ####################################################################################### //
+// ======================= AUDIO PROCESSING CALLBACK =======================
+// Funkcja przekazująca próbki audio do analizatora FFT (wywoływana z Audio.cpp)
+// UWAGA: Wersja 3.4.4 używa int16_t (kompatybilność backward)
+void audio_process_i2s(int16_t* outBuff, int32_t validSamples, bool* continueI2S)
+{
+  // Push audio samples to SDRecorder (jeśli nagrywa)
+  if (g_sdRecorder && g_sdRecorder->isRecording()) {
+    g_sdRecorder->pushAudioData(outBuff, validSamples);
   }
   
-  // ----------------- EQ16 GRAPHIC EQUALIZER - Inicjalizacja -----------------
-  EQ16_init();
-  EQ16_loadFromSD();  // Ładuj ustawienia z SD karty
-  EQ16_enable(true);  // Wymusimy włączenie na starcie
-  Serial.println("EQ16: 16-Band Graphic Equalizer OK");
+  // Push audio samples to EQ analyzer (validSamples is number of stereo frames)
+  eq_analyzer_push_samples_i16((const int16_t*)outBuff, validSamples);
+  
+  // Używamy 3-punktowego equalizera z audio.setTone()
+  // Continue normal audio processing
+  *continueI2S = true;
 }
+
 // #######################################################################################  LOOP  ####################################################################################### //
 void loop() 
 {
+  // MONITORING PAMIĘCI: Sprawdzenie czy może być problem z odrestartowywaniem
+  static unsigned long memCheckTime = 0;
+  static int loopCounter = 0;
+  
+  if (millis() - memCheckTime > 60000) { // Co 60 sekund (zoptymalizowane)
+    size_t freeHeap = ESP.getFreeHeap();
+    size_t minFreeHeap = ESP.getMinFreeHeap();
+    
+    // Loguj tylko przy niskiej pamięci
+    if (freeHeap < 20000 || minFreeHeap < 15000) {
+      Serial.printf("[WARNING] Low memory! Free: %u bytes, Min: %u bytes, Loop: %d\n", 
+                    freeHeap, minFreeHeap, loopCounter);
+    }
+    
+    memCheckTime = millis();
+    loopCounter = 0;
+  }
+  loopCounter++;
+  
   runTime1 = esp_timer_get_time();
-  audio.loop();           // Wykonuje główną pętlę dla obiektu audio (np. odtwarzanie dźwięku, obsługa audio)
-  // BT_loop();              // Obsługa modułu Bluetooth KCX_BT_EMITTER (tylko if-y, bez tasków)
-  SDPlayerOLED_loop();    // Obsługa SDPlayer OLED
-  BTWebUI_loop();         // Obsługa Bluetooth WebUI
+  audio.loop();           // Wykonuje główną pętlę dla obiektu audio
+  
+  // =============== OBSŁUGA ZINTEGROWANYCH MODUŁÓW ===============
+  // SDPlayer - obsługa odtwarzania plików SD
+  SDPlayerOLED_loop();   // Aktualizacja OLED dla SDPlayer (wywołuje loop() tylko gdy aktywny)
+  // Gdy SDPlayer jest aktywny - NIE wywoływuj displayRadio() w dalszej części
+  
+  // SDRecorder - obsługa nagrywania strumienia
+  SDRecorder_loop();     // Aktualizacja SDRecorder (flush bufora, sprawdzanie limitów)
+  
+  // BTWebUI - polling UART dla modułu Bluetooth
+  if (btModuleEnabled) {
+    BTWebUI_loop();        // Odczyt danych UART z modułu BT (wrapper function)
+  }
   
   // Obsługa auto-play SDPlayera (w głównej pętli, nie w callback Audio)
-  if (sdPlayerAutoPlayNext && g_sdPlayerWeb && sdPlayerPlayingMusic) {
+  // KRYTYCZNA ZMIANA: Sprawdzaj TYLKO sdPlayerAutoPlayNext (bez sdPlayerPlayingMusic)
+  // bo gdy utwór się kończy, sdPlayerPlayingMusic może być false ale chcemy auto-play!
+  if (sdPlayerAutoPlayNext) {
     sdPlayerAutoPlayNext = false; // Zresetuj flagę
-    Serial.println("[SDPlayer] Wykonywanie auto-play następnego utworu");
-    g_sdPlayerWeb->playNextAuto();
+    
+    // TRYB 1: Odtwarzanie przez PILOTA (lista utworów w pamięci tracksCount > 0)
+    if (tracksCount > 0 && lastPlayedTrackIndex >= 0 && sdPlayerOLEDActive) {
+      Serial.println("[SDPlayer OLED] Auto-play następnego utworu (pilot)");
+      
+      // Przejdź do następnego utworu (z zapętleniem)
+      lastPlayedTrackIndex++;
+      if (lastPlayedTrackIndex >= tracksCount) {
+        lastPlayedTrackIndex = 0; // Wróć do początku listy
+      }
+
+      if (sdPlayerSessionStartIndex < 0) {
+        sdPlayerSessionStartIndex = lastPlayedTrackIndex;
+      }
+      sdPlayerSessionEndIndex = lastPlayedTrackIndex;
+      sdPlayerSessionCompleted = false;
+      saveSDPlayerSessionState();
+      
+      currentTrackSelection = lastPlayedTrackIndex; // Synchronizuj kursor
+      
+      // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+      currentMP3Artist = "";
+      currentMP3Title = "";
+      currentMP3Album = "";
+      
+      // Odtwórz następny plik - trackFiles[] już zawiera pełną ścieżkę względną
+      String filePath = "/" + trackFiles[lastPlayedTrackIndex];
+      Serial.printf("[SDPlayer OLED] Odtwarzanie: %s (indeks %d)\n", 
+                    trackFiles[lastPlayedTrackIndex].c_str(), lastPlayedTrackIndex);
+      
+      audio.connecttoFS(STORAGE, filePath.c_str());
+      
+      // WALIDACJA: Sprawdź Duration (ochrona przed IntegerDivideByZero)
+      // Czekaj aż Duration > 0 lub timeout 2.5s (smart loop)
+      uint32_t duration = 0;
+      for(int i = 0; i < 50 && duration == 0; i++) {
+        audio.loop();
+        delay(50);
+        duration = audio.getAudioFileDuration();
+      }
+      if (duration == 0) {
+        Serial.println("[SDPlayer OLED] ERROR - Corrupted file (Duration=0)");
+        audio.stopSong();
+        sdPlayerPlayingMusic = false;
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile("");
+          g_sdPlayerWeb->setIsPlaying(false);
+        }
+      } else {
+        // KRYTYCZNE: Aktualizuj nazwę pliku i stan odtwarzania SDPlayer
+        sdPlayerPlayingMusic = true; // Ustaw flagę odtwarzania SDPlayera
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile(trackFiles[lastPlayedTrackIndex]);
+          g_sdPlayerWeb->setIsPlaying(true);  // Ustaw flagę odtwarzania
+        }
+      }
+    }
+    // TRYB 2: Odtwarzanie przez WebUI (lazy loading, _fileList > 0)
+    else if (g_sdPlayerWeb) {
+      Serial.println("[SDPlayer WebUI] Auto-play następnego utworu (WebUI)");
+      g_sdPlayerWeb->playNextAuto();
+      
+      // KRYTYCZNE: Synchronizuj indeks między WebUI a OLED
+      if (g_sdPlayerOLED && sdPlayerOLEDActive) {
+        int webIndex = g_sdPlayerWeb->getSelectedIndex();
+        g_sdPlayerOLED->setSelectedIndex(webIndex);
+        if (webIndex >= 0) {
+          if (sdPlayerSessionStartIndex < 0) {
+            sdPlayerSessionStartIndex = webIndex;
+          }
+          sdPlayerSessionEndIndex = webIndex;
+          sdPlayerSessionCompleted = false;
+          saveSDPlayerSessionState();
+        }
+        Serial.printf("[SDPlayer] Synchronized OLED index to %d\n", webIndex);
+      }
+    }
+    // TRYB 3: Brak listy - zatrzymaj odtwarzanie
+    else {
+      Serial.println("[SDPlayer] Auto-play BŁĄD: Brak listy utworów - zatrzymuję odtwarzanie");
+      sdPlayerPlayingMusic = false;
+    }
   }
+  
+  // Obsługa skanowania katalogu SDPlayera (w głównej pętli aby uniknąć watchdog timeout)
+  if (sdPlayerScanRequested && g_sdPlayerWeb) {
+    sdPlayerScanRequested = false; // Zresetuj flagę
+    Serial.println("[SDPlayer] Wykonywanie skanowania katalogu w loop()...");
+    g_sdPlayerWeb->scanDirectory();  // Wywołaj publiczną metodę skanowania
+    Serial.println("[SDPlayer] Skanowanie zakończone");
+  }
+  
+  // Analyzer - analiza spektrum (działa na osobnym rdzeniu)
+  // eq_analyzer_loop() wywoływane jest automatycznie w osobnym wątku
+  // Tutaj tylko sprawdzamy czy analyzer jest aktywny
+  // ==============================================================
+  
   button2.loop();         // Wykonuje pętlę dla obiektu button2 (sprawdza stan przycisku z enkodera 2)
-  handleButtons();        // Wywołuje funkcję obsługującą przyciski i wykonuje odpowiednie akcje (np. zmiana opcji, wejście do menu)
-  handleFadeIn();
+  handleButtons();        // Wywołuje dodatkowe funkcję obsługującą przyciski enkoderow
+  handleFadeIn();         // Obsługa sciszania stacji przy przełaczaniu
+  
+  #ifdef SERIALCOM
+    handleSerialRX();
+  #endif
   vTaskDelay(1);          // Krótkie opóźnienie, oddaje czas procesora innym zadaniom
+  
+  /*---------------------  FUNKCJA PILOT IR  / Obsluga pilota IR w kodzie NEC ---------------------*/ 
+  handleRemote();         
 
+  /*-- OBSŁUGA IR TIMEOUT dla wielocyfrowego wprowadzania ---------------------*/
+  if (irInputActive && millis() > irInputTimeout) {
+    // Timeout - potwierdź wprowadzoną liczbę automatycznie
+    if (irInputBuffer > 0 && irInputBuffer <= 100) {
+      Serial.printf("[IR SDPlayer] Timeout - auto-confirming track: %d\n", irInputBuffer);
+      irRequestedTrackNumber = irInputBuffer;
+      irTrackSelectionRequest = true;
+    } else {
+      Serial.printf("[IR SDPlayer] Timeout - invalid buffer: %d, clearing\n", irInputBuffer);
+    }
+    
+    // Resetuj system wprowadzania
+    irInputBuffer = 0;
+    irInputActive = false;
+    irInputTimeout = 0;
+  }
+  
+  /*-- OBSŁUGA IR TRACK SELECTION dla SDPlayera ---------------------*/
+  if (irTrackSelectionRequest && sdPlayerOLEDActive) {
+    irTrackSelectionRequest = false; // Zresetuj flagę
+    
+    Serial.printf("[IR SDPlayer] Processing track selection request %d (current tracksCount=%d)\n", 
+                  irRequestedTrackNumber, tracksCount);
+    
+    // Załaduj listę utworów jeśli nie została jeszcze załadowana
+    if (tracksCount == 0) {
+      Serial.println("[IR SDPlayer] Loading tracks from SD card...");
+      loadTracksFromSD();
+      Serial.printf("[IR SDPlayer] Loaded %d tracks\n", tracksCount);
+    }
+    
+    if (irRequestedTrackNumber >= 1 && irRequestedTrackNumber <= tracksCount) {
+      int trackIndex = irRequestedTrackNumber - 1; // Konwersja na indeks (0-based)
+      
+      Serial.printf("[IR SDPlayer] Wybieranie utworu %d (indeks %d): %s\n", 
+                    irRequestedTrackNumber, trackIndex, trackFiles[trackIndex].c_str());
+      
+      // Ustaw aktualny wybór i odtwórz utwór
+      currentTrackSelection = trackIndex;
+      lastPlayedTrackIndex = trackIndex;
+      
+      // Zapisz stan sesji
+      if (sdPlayerSessionStartIndex < 0) {
+        sdPlayerSessionStartIndex = trackIndex;
+      }
+      sdPlayerSessionEndIndex = trackIndex;
+      sdPlayerSessionCompleted = false;
+      saveSDPlayerSessionState();
+      
+      // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+      currentMP3Artist = "";
+      currentMP3Title = "";
+      currentMP3Album = "";
+      
+      // Odtwórz wybrany plik - trackFiles[] już zawiera pełną ścieżkę względną
+      String filePath = "/" + trackFiles[trackIndex];
+      audio.connecttoFS(STORAGE, filePath.c_str());
+      
+      // WALIDACJA: Sprawdź Duration (ochrona przed IntegerDivideByZero)
+      // Czekaj aż Duration > 0 lub timeout 2.5s
+      uint32_t duration = 0;
+      for(int i = 0; i < 50 && duration == 0; i++) {
+        audio.loop();
+        delay(50);
+        duration = audio.getAudioFileDuration();
+      }
+      if (duration == 0) {
+        Serial.println("[SDPlayer] ERROR - Corrupted file (Duration=0)");
+        audio.stopSong();
+        sdPlayerPlayingMusic = false;
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile("");
+          g_sdPlayerWeb->setIsPlaying(false);
+        }
+      } else {
+        sdPlayerPlayingMusic = true;
+        
+        // Aktualizuj SDPlayerWebUI
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile(trackFiles[trackIndex]);
+          g_sdPlayerWeb->setIsPlaying(true);
+        }
+      }
+      
+      // Pokaż komunikat na OLED
+      displayActive = true;
+      displayStartTime = millis();
+      timeDisplay = false;
+      
+      if (g_sdPlayerOLED) {
+        String message = "TRACK " + String(irRequestedTrackNumber);
+        g_sdPlayerOLED->showActionMessage(message);
+      }
+      
+      Serial.printf("[IR SDPlayer] Utwór %d uruchomiony pomyślnie\n", irRequestedTrackNumber);
+    }
+    else if (irRequestedTrackNumber == 0) {
+      // Klawisz 0 = utwór 10 (jeśli istnieje)
+      if (tracksCount >= 10) {
+        int trackIndex = 9; // Indeks dla utworu 10
+        
+        Serial.printf("[IR SDPlayer] Wybieranie utworu 10 (klawisz 0, indeks %d): %s\n", 
+                      trackIndex, trackFiles[trackIndex].c_str());
+        
+        currentTrackSelection = trackIndex;
+        lastPlayedTrackIndex = trackIndex;
+        
+        if (sdPlayerSessionStartIndex < 0) {
+          sdPlayerSessionStartIndex = trackIndex;
+        }
+        sdPlayerSessionEndIndex = trackIndex;
+        sdPlayerSessionCompleted = false;
+        saveSDPlayerSessionState();
+        
+        // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+        currentMP3Artist = "";
+        currentMP3Title = "";
+        currentMP3Album = "";
+        
+        // trackFiles[] już zawiera pełną ścieżkę względną
+        String filePath = "/" + trackFiles[trackIndex];
+        audio.connecttoFS(STORAGE, filePath.c_str());
+        
+        // WALIDACJA: Sprawdź Duration (ochrona przed IntegerDivideByZero)
+        // Czekaj aż Duration > 0 lub timeout 2.5s
+        uint32_t duration = 0;
+        for(int i = 0; i < 50 && duration == 0; i++) {
+          audio.loop();
+          delay(50);
+          duration = audio.getAudioFileDuration();
+        }
+        if (duration == 0) {
+          Serial.println("[SDPlayer] ERROR - Corrupted file (Duration=0)");
+          audio.stopSong();
+          sdPlayerPlayingMusic = false;
+          if (g_sdPlayerWeb) {
+            g_sdPlayerWeb->setCurrentFile("");
+            g_sdPlayerWeb->setIsPlaying(false);
+          }
+        } else {
+          sdPlayerPlayingMusic = true;
+          
+          if (g_sdPlayerWeb) {
+            g_sdPlayerWeb->setCurrentFile(trackFiles[trackIndex]);
+            g_sdPlayerWeb->setIsPlaying(true);
+          }
+        }
+        
+        displayActive = true;
+        displayStartTime = millis();
+        timeDisplay = false;
+        
+        if (g_sdPlayerOLED) {
+          g_sdPlayerOLED->showActionMessage("TRACK 10");
+        }
+        
+        Serial.println("[IR SDPlayer] Utwór 10 (klawisz 0) uruchomiony pomyślnie");
+      } else {
+        Serial.printf("[IR SDPlayer] BŁĄD: Brak utworu 10 (dostępne tylko %d utworów)\n", tracksCount);
+      }
+    }
+    else {
+      Serial.printf("[IR SDPlayer] BŁĄD: Nieprawidłowy numer utworu %d (dostępne: 1-%d)\n", 
+                    irRequestedTrackNumber, tracksCount);
+    }
+    
+    irRequestedTrackNumber = 0; // Zresetuj numer utworu
+  }
 
-  /*---------------------  FUNKCJA KLAWIATURA / Odczyt stanu klawiatura ADC pod GPIO 9 ---------------------*/
+  /*-- FUNKCJA KLAWIATURA / Odczyt stanu klawiatura ADC pod GPIO 9 ---------------------*/
   if ((millis() - keyboardLastSampleTime >= keyboardSampleDelay) && (adcKeyboardEnabled)) // Sprawdzenie ADC - klawiatury 
   {
     keyboardLastSampleTime = millis();
     handleKeyboard();
   }
-  
-  /*---------------------  FUNKCJA DIMMER ---------------------*/
-  if ((displayActive == true) && (displayDimmerActive == true) && (fwupd == false)) {displayDimmer(0);}  
-
-  /*---------------------  FUNKCJA EQ16 AUTO-SAVE ---------------------*/
-  static unsigned long lastEQ16AutoSaveTime = 0;
-  if (millis() - lastEQ16AutoSaveTime > 1000) { // Sprawdzaj tylko co sekundę
-    EQ16_autoSave();  // Automatyczny zapis ustawień EQ16
-    lastEQ16AutoSaveTime = millis();
-  }
-
-  // Obsługa enkodera 1 - ocpojanlnego
+    
+  /*-- ENKODER 1 - obsluga opcjonlanego enkodera 1 ---------------------*/
   #ifdef twoEncoders
     button1.loop();
     handleEncoder1();
   #endif
-  
-  // Obsługa enkodera 2
-  if (eq16MenuActive) {
-    handleEQ16Encoder();
-  } else if (encoderFunctionOrder == 0) { 
-    handleEncoder2VolumeStationsClick(); 
-  } else if (encoderFunctionOrder == 1) { 
-    handleEncoder2StationsVolumeClick(); 
-  }
+
+  /*-- ENKODER 2 - Podstaowy, obsluga enkodera 2 ---------------------*/
+  if (encoderFunctionOrder) { handleEncoder2StationsVolumeClick();} else {handleEncoder2VolumeStationsClick();}
+
+
+  //if (encoderFunctionOrder == 0) { handleEncoder2VolumeStationsClick(); } 
+  //else if (encoderFunctionOrder == 1) { handleEncoder2StationsVolumeClick(); }
   
   // Obsługa przycisku Power ON/OFF
   #ifdef SW_POWER
     if (digitalRead(SW_POWER) == LOW) {powerOff();}
   #endif
 
- /*---------------------  FUNKCJA BACK / POWROTU ze wszystkich opcji Menu, Ustawien, itd ---------------------*/
-  // Nie aktywuj timeout gdy EQ16 menu jest aktywne
-  if ((fwupd == false) && (displayActive) && (millis() - displayStartTime >= displayTimeout) && (!EQ16_isMenuActive()))  // Przywracanie poprzedniej zawartości ekranu po 6 sekundach
+  /*---------------------  FUNKCJA DIMMER ---------------------*/
+  if ((displayActive == true) && (displayDimmerActive == true) && (fwupd == false)) {displayDimmer(0);}  
+
+  /*---------------------  FUNKCJA BACK / POWROTU ze wszystkich opcji Menu, Ustawien, itd ---------------------*/
+  if ((fwupd == false) && (displayActive) && (millis() - displayStartTime >= displayTimeout))  // Przywracanie poprzedniej zawartości ekranu po 8 sekundach
   {
     if (volumeBufferValue != volumeValue && f_saveVolumeStationAlways) { saveVolumeOnSD(); }    
     if ((rcInputDigitsMenuEnable == true) && (station_nr != stationFromBuffer)) { changeStation(); }  // Jezeli nastapiła zmiana numeru stacji to wczytujemy nową stacje
     
+    // AUTO-PLAY dla listy utworów SDPlayer po 8 sekundach
+    if (listedTracks && tracksCount > 0 && sdPlayerOLEDActive) {
+      Serial.print("[SDPlayer] Auto-play po 8 sekundach: ");
+      Serial.println(trackFiles[currentTrackSelection]);
+      
+      // Zapamiętaj wybrany utwór dla auto-play
+      lastPlayedTrackIndex = currentTrackSelection;
+      
+      // KRYTYCZNE: Wyczyść stare metadane ID3 przed załadowaniem nowego utworu
+      currentMP3Artist = "";
+      currentMP3Title = "";
+      currentMP3Album = "";
+      
+      // Odtwórz wybrany plik - trackFiles[] już zawiera pełną ścieżkę względną
+      String filePath = "/" + trackFiles[currentTrackSelection];
+      audio.connecttoFS(STORAGE, filePath.c_str());
+      
+      // WALIDACJA: Sprawdź Duration przed kontynuacją (ochrona przed IntegerDivideByZero)
+      // Czekaj aż Duration > 0 lub timeout 2.5s
+      uint32_t duration = 0;
+      for(int i = 0; i < 50 && duration == 0; i++) {
+        audio.loop();
+        delay(50);
+        duration = audio.getAudioFileDuration();
+      }
+      if (duration == 0) {
+        Serial.println("[SDPlayer] ERROR - Auto-play: Corrupted file detected (Duration=0)");
+        Serial.println("[SDPlayer] Stopping playback to prevent crash");
+        audio.stopSong();
+        sdPlayerPlayingMusic = false;
+        
+        // Wyczyść stan SDPlayerWebUI        
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile("");
+          g_sdPlayerWeb->setIsPlaying(false);
+        }
+      } else {
+        // Plik jest poprawny - kontynuuj normalnie
+        sdPlayerPlayingMusic = true;
+        
+        // KRYTYCZNE: Aktualizuj nazwę pliku i stan odtwarzania w SDPlayerWebUI dla wyświetlacza
+        if (g_sdPlayerWeb) {
+          g_sdPlayerWeb->setCurrentFile(trackFiles[currentTrackSelection]);
+          g_sdPlayerWeb->setIsPlaying(true);  // Ustaw flagę odtwarzania
+        }
+      }
+      
+      listedTracks = false;  // Wyłącz flagę listy
+      displayActive = false;
+      timeDisplay = false;
+      u8g2.clearBuffer();
+      delay(50);  // Krótka pauza dla stabilności
+      Serial.printf("[SDPlayer] Auto-play uruchomiony (indeks %d) - ekran zostanie odświeżony\n", lastPlayedTrackIndex);
+    }
+    
     displayDimmer(0); 
     clearFlags();
     
-    // Nie nadpisuj EQ16 menu
-    if (!EQ16_isMenuActive()) {
+    // KRYTYCZNE: Nie nadpisuj ekranu gdy SDPlayer OLED aktywny
+    if (!sdPlayerOLEDActive) {
       displayRadio();
       u8g2.sendBuffer();
     }
-    currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
+    
+    // Przywracamy zaznaczenie obecnie grajacej stacji
+    currentSelection = station_nr - 1; 
+    //if (maxSelection() - currentSelection < maxVisibleLines) {firstVisibleLine = maxSelection() - 3;} else {firstVisibleLine = currentSelection;}
   }
 
- /*---------------------  FUNKCJA PILOT IR  / Obsluga pilota IR w kodzie NEC ---------------------*/ 
-  if (bit_count == 32) // sprawdzamy czy odczytalismy w przerwaniu pełne 32 bity kodu IR NEC
-  {
-    if (ir_code != 0) // sprawdzamy czy zmienna ir_code nie jest równa 0
-    {
-      
-      detachInterrupt(recv_pin);            // Rozpinamy przerwanie
-      Serial.printf("DEBUG IR: Received code=0x%08X\n", ir_code);
-      Serial.print("debug IR -> Kod NEC OK:");
-      Serial.print(ir_code, HEX);
-      ir_code = reverse_bits(ir_code,32);   // Rotacja bitów - zmiana porządku z LSB-MSB na MSB-LSB
-      Serial.print("  MSB-LSB: ");
-      Serial.print(ir_code, HEX);
-    
-      uint8_t CMD = (ir_code >> 16) & 0xFF; // Drugi bajt (inwersja adresu)
-      uint8_t ADDR = ir_code & 0xFF;        // Czwarty bajt (inwersja komendy)
-      
-      Serial.print("  ADR:");
-      Serial.print(ADDR, HEX);
-      Serial.print(" CMD:");
-      Serial.println(CMD, HEX);
-      ir_code = ADDR << 8 | CMD;      // Łączymy ADDR i CMD w jedną zmienną 0x ADR CMD
-      
-      Serial.printf("DEBUG IR: Final ir_code=0x%04X (checking against rcCmdAud=0x%04X)\n", ir_code, rcCmdAud);
 
-      // Info o przebiegach czasowytch kodu pilota IR
-      Serial.print("debug IR -> puls 9ms:"); 
-      Serial.print(pulse_duration_9ms);
-      Serial.print("  4.5ms:");
-      Serial.print(pulse_duration_4_5ms);
-      Serial.print("  1690us:");
-      Serial.print(pulse_duration_1690us);
-      Serial.print("  560us:");
-      Serial.println(pulse_duration_560us);
-
-
-      fwupd = false;        // Kasujemy flagę aktulizacji OTA gdyby była ustawiona
-      //displayActive = true; // jesli odbierzemy kod z pilota to uatywnij wyswietlacz i wyłacz przyciemnienie OLEDa
-      //displayDimmer(0); // jesli odbierzemy kod z pilota to wyłaczamy przyciemnienie wyswietlacza OLED
-      displayPowerSave(0);
-      
-      // ===== SDPLAYER PILOT ROUTING (PRIORITY) =====
-      if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
-        // Obsługa dedykowanych przycisków SDPlayera
-        if (ir_code == rcCmdArrowUp) {
-          g_sdPlayerOLED->onRemoteUp();
-        }
-        else if (ir_code == rcCmdArrowDown) {
-          g_sdPlayerOLED->onRemoteDown();
-        }
-        else if (ir_code == rcCmdOk) {
-          g_sdPlayerOLED->onRemoteOK();
-        }
-        else if (ir_code == rcCmdSrc) {
-          // SRC - zmiana stylu OLED SDPlayera
-          g_sdPlayerOLED->nextStyle();
-          Serial.println("DEBUG: SDPlayer style changed via SRC");
-        }
-        else if (ir_code == rcCmdBT) {
-          // BT button - ponieważ moduł BT usunięty, używamy jako dodatkowy przycisk zmiany stylu
-          g_sdPlayerOLED->nextStyle();
-          Serial.println("DEBUG: SDPlayer style changed via BT button (BT module removed)");
-        }
-        else if (ir_code == rcCmdBack) {
-          // BACK - podwójne kliknięcie wychodzi z SDPlayera, pojedyncze = STOP
-          static unsigned long lastBackPress = 0;
-          static uint8_t backClickCount = 0;
-          unsigned long currentTime = millis();
-          
-          if (currentTime - lastBackPress > 600) { // 600ms okno
-            backClickCount = 0; // Reset po timeout
-          }
-          
-          backClickCount++;
-          lastBackPress = currentTime;
-          
-          if (backClickCount >= 2) {
-            // Podwójne kliknięcie - wyjście z SDPlayera
-            Serial.println("DEBUG: Double BACK press - exiting SDPlayer to radio");
-            backClickCount = 0; // Reset
-            
-            g_sdPlayerOLED->deactivate();
-            sdPlayerOLEDActive = false;
-            sdPlayerPlayingMusic = false;
-            audio.stopSong();
-            
-            // Ustaw bank 1, stację 4
-            bank_nr = 1;
-            station_nr = 4;
-            changeStation();
-            displayRadio();
-            u8g2.sendBuffer();
-          } else {
-            // Pojedyncze kliknięcie - STOP
-            g_sdPlayerOLED->onRemoteStop();
-            Serial.println("SD Player: BACK button - STOP (press again quickly to exit)");
-          }
-        }
-        else if (ir_code == rcCmdKey0) {
-          // Key0 - wyjście z SDPlayera do radia
-          Serial.println("DEBUG: Exiting SDPlayer to radio Bank 1, Station 4");
-          g_sdPlayerOLED->deactivate();
-          sdPlayerOLEDActive = false;
-          sdPlayerPlayingMusic = false;
-          audio.stopSong();
-          
-          // Ustaw bank 1, stację 4
-          bank_nr = 1;
-          station_nr = 4;
-          changeStation();
-          displayRadio();
-          u8g2.sendBuffer();
-        }
-        else if (ir_code == rcCmdVolumeUp) {
-          g_sdPlayerOLED->onRemoteVolUp();
-        }
-        else if (ir_code == rcCmdVolumeDown) {
-          g_sdPlayerOLED->onRemoteVolDown();
-        }
-        else if (ir_code == rcCmdKey9) {
-          // Key9 - pozostaw bez zmian, obsłuży poniższy kod
-          // NIE BLOKUJ Key9 - pozwól mu przejść dalej
-        }
-        else {
-          // WSZYSTKIE inne przyciski są ignorowane gdy SDPlayer aktywny
-          Serial.printf("DEBUG: SDPlayer active - blocking IR code 0x%04X\n", ir_code);
-        }
-        
-        // Zablokuj WSZYSTKIE komendy oprócz Key9 (dla triple-click exit)
-        if (ir_code != rcCmdKey9) {
-          ir_code = 0;
-        }
-      }
-      // ===== KONIEC SDPLAYER ROUTING =====
-      
-      if (ir_code == rcCmdVolumeUp)  { volumeUp(); }         // Przycisk głośniej
-      else if (ir_code == rcCmdVolumeDown) { volumeDown(); } // Przycisk ciszej
-      else if (ir_code == rcCmdArrowRight) // strzałka w prawo - nastepna stacja, bank lub nastawy equalizera
-      {  
-        if (bankMenuEnable == true)
-        {
-          bank_nr++;
-          if (bank_nr > bank_nr_max) 
-          {
-            bank_nr = 1;
-          }
-        bankMenuDisplay();
-        }
-        else if (btMenuActive == true)  // BT MENU NAVIGATION
-        {
-          Serial.println("DEBUG BT: Arrow RIGHT - menu down");
-          // BT_menuDown();
-          // BT_displayMenu(u8g2);
-          u8g2.sendBuffer();
-        }
-        else if (eq16MenuActive == true)  // 16-BAND EQ NAVIGATION
-        {
-          Serial.println("DEBUG EQ16: Arrow RIGHT - selecting next band");
-          Serial.println("DEBUG EQ16: Calling EQ16_selectNextBand()");
-          EQ16_selectNextBand();
-          EQ16_displayMenu(); // Odśwież wyświetlacz
-        }
-        else if (equalizerMenuEnable == true)
-        {
-          if (toneSelect == 1) {toneHiValue++;}
-          if (toneSelect == 2) {toneMidValue++;}
-          if (toneSelect == 3) {toneLowValue++;}
-          
-          if (toneHiValue > 6) {toneHiValue = 6;}
-          if (toneMidValue > 6) {toneMidValue = 6;}
-          if (toneLowValue > 6) {toneLowValue = 6;}
-          
-          if (!useEQ16) applyEqualizerSettings();  // Apply 3-point EQ changes
-          displayEqualizer();
-        }     
-        else if (listedStations == true) // Szybkie przewijanie o 5 stacji
-        {
-          timeDisplay = false;
-          displayActive = true;
-          displayStartTime = millis();    
-          station_nr = currentSelection + 1;
-
-          station_nr = station_nr + 5;
-          for (int i = 0; i < 5; i++) {scrollDown();}
-    
-          if (station_nr > stationsCount) {station_nr = station_nr - stationsCount; } //Zbaezpiecznie aby przewijac sie tylko po stacjach w liczbie jaka jest w stationCount
-          
-          displayStations();
-        }
-        else
-        {
-          station_nr++;
-          //if (station_nr > stationsCount) { station_nr = stationsCount; }
-          if (station_nr > stationsCount) { station_nr = 1; } // Przwijanie listy stacji w pętli po osiągnieciu ostatniej stacji banku przewijamy do pierwszej.
-          changeStation();
-          if (!EQ16_isMenuActive()) {
-            displayRadio();
-            u8g2.sendBuffer();
-          }
-        }
-      }
-      else if (ir_code == rcCmdArrowLeft) // strzałka w lewo - poprzednia stacja, bank lub nastawy equalizera
-      {  
-        if (bankMenuEnable == true)
-        {
-          bank_nr--;
-          if (bank_nr < 1) 
-          {
-            bank_nr = bank_nr_max;
-          }
-        bankMenuDisplay();  
-        }
-        else if (btMenuActive == true)  // BT MENU NAVIGATION
-        {
-          Serial.println("DEBUG BT: Arrow LEFT - menu up");
-          // BT_menuUp();
-          // BT_displayMenu(u8g2);
-          u8g2.sendBuffer();
-        }
-        else if (eq16MenuActive == true)  // 16-BAND EQ NAVIGATION
-        {
-          Serial.println("DEBUG EQ16: Arrow LEFT - selecting previous band");
-          Serial.println("DEBUG EQ16: Calling EQ16_selectPrevBand()");
-          EQ16_selectPrevBand();
-          EQ16_displayMenu(); // Odśwież wyświetlacz
-        }
-        else if (equalizerMenuEnable == true)
-        {
-          if (toneSelect == 1) {toneHiValue--;}
-          if (toneSelect == 2) {toneMidValue--;}
-          if (toneSelect == 3) {toneLowValue--;}
-          
-          if (toneHiValue < -40) {toneHiValue = -40;}
-          if (toneMidValue < -40) {toneMidValue = -40;}
-          if (toneLowValue < -40) {toneLowValue = -40;}
-          
-          if (!useEQ16) applyEqualizerSettings();  // Apply 3-point EQ changes
-          displayEqualizer();
-        }     
-        else if (listedStations == true)
-        {
-          timeDisplay = false;
-          displayActive = true;
-          displayStartTime = millis();    
-          station_nr = currentSelection + 1;
-
-          station_nr = station_nr - 5;
-          
-          for (int i = 0; i < 5; i++) {scrollUp();}
-      
-          //Zbaezpiecznie aby przewijac sie tylko po stacjach w liczbie jaka jest w stationCount
-          if (station_nr > stationsCount) { station_nr = (stationsCount - (255 - station_nr)) - 1 ;} 
-          
-          // Jesli jestesmy na stacji nr 5 to aby uniknąc station_nr = 0 przewijamy do ostatniej
-          if (station_nr == 0) {station_nr = stationsCount;} 
-
-          displayStations();
-        }      
-        else
-        {        
-          station_nr--;
-          //if (station_nr < 1) { station_nr = 1; }
-          if (station_nr < 1) { station_nr = stationsCount; } // Przwijanie listy stacji w pętli po osiągnieciu ostatniej stacji banku przewijamy do pierwszej.
-          changeStation();
-          if (!EQ16_isMenuActive()) {
-            displayRadio();
-            u8g2.sendBuffer();
-          }
-        }
-      }
-      else if ((ir_code == rcCmdArrowUp) && (volumeSet == false) && (equalizerMenuEnable == true))
-      {
-        toneSelect--;
-        if (toneSelect < 1){toneSelect = 1;}
-        displayEqualizer();
-      }
-      else if ((ir_code == rcCmdArrowUp) && (btMenuActive == true))
-      {
-        Serial.println("DEBUG BT: Arrow UP - menu up");
-        // BT_menuUp();
-        // BT_displayMenu(u8g2);
-        u8g2.sendBuffer();
-      }
-      else if ((ir_code == rcCmdArrowUp) && (eq16MenuActive == true))
-      {
-        Serial.println("DEBUG EQ16: Arrow UP - increasing gain of selected band");
-        Serial.println("DEBUG EQ16: Calling EQ16_increaseBandGain()");
-        EQ16_increaseBandGain();
-        EQ16_displayMenu(); // Odśwież wyświetlacz
-      }
-      else if ((ir_code == rcCmdArrowUp) && (equalizerMenuEnable == false))// Przycisk w góre
-      {  
-        if ((volumeSet == true) && (volumeBufferValue != volumeValue))
-        {
-          if (f_saveVolumeStationAlways) {saveVolumeOnSD();}
-          volumeSet = false;
-        }
-        
-        timeDisplay = false;
-        displayActive = true;
-        displayStartTime = millis();    
-        station_nr = currentSelection + 1;
-
-        if (listedStations == true) 
-        {
-          // Lista już otwarta - przewijaj w górę
-          station_nr--; 
-          scrollUp();
-        } 
-        else
-        {        
-          // Pierwsze naciśnięcie UP - otwórz listę stacji
-          listedStations = true;
-          Serial.println("DEBUG: UP pressed - opening stations list");
-          currentSelection = station_nr - 1; // Ustaw zaznaczenie na obecnie grającą stację
-          
-          // Dostosuj widok żeby pokazać aktualną stację
-          if (currentSelection >= 0)
-          {
-            if (currentSelection < firstVisibleLine) 
-            {
-              firstVisibleLine = currentSelection;
-            }
-            else if (currentSelection >= firstVisibleLine + maxVisibleLines)
-            {
-              firstVisibleLine = currentSelection - maxVisibleLines + 1;
-            }
-          } 
-          else 
-          {  
-            currentSelection = 0;
-            firstVisibleLine = 0;
-          }   
-        }
-        
-        if (station_nr < 1) { station_nr = stationsCount; } // jesli dojdziemy do początku listy stacji to przewijamy na koniec
-        
-        displayStations();
-      }
-      else if ((ir_code == rcCmdArrowDown) && (volumeSet == false) && (equalizerMenuEnable == true))
-      {
-        toneSelect++;
-        if (toneSelect > 3){toneSelect = 3;}
-        displayEqualizer();
-      }
-      else if ((ir_code == rcCmdArrowDown) && (btMenuActive == true))
-      {
-        Serial.println("DEBUG BT: Arrow DOWN - menu down");
-        // BT_menuDown();
-        // BT_displayMenu(u8g2);
-        u8g2.sendBuffer();
-      }
-      else if ((ir_code == rcCmdArrowDown) && (eq16MenuActive == true))
-      {
-        Serial.println("DEBUG EQ16: Arrow DOWN - decreasing gain of selected band");
-        Serial.println("DEBUG EQ16: Calling EQ16_decreaseBandGain()");
-        EQ16_decreaseBandGain();
-        EQ16_displayMenu(); // Odśwież wyświetlacz
-      }
-      else if ((ir_code == rcCmdArrowDown) && (equalizerMenuEnable == false)) // Przycisk w dół
-      {  
-        if ((volumeSet == true) && (volumeBufferValue != volumeValue))
-        {
-          if (f_saveVolumeStationAlways) {saveVolumeOnSD();}
-          volumeSet = false;
-        }
-        
-        timeDisplay = false;
-        displayActive = true;
-        displayStartTime = millis();     
-        station_nr = currentSelection + 1;
-        
-        //station_nr++;
-        if (listedStations == true) {station_nr++; scrollDown(); } //station_nr++ tylko jesli już wyswietlany liste stacji;
-        else
-        {        
-          currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
-
-          if (currentSelection >= 0)
-          {
-            if (currentSelection < firstVisibleLine) // jezeli obecne zaznaczenie ma wartosc mniejsza niz pierwsza wyswietlana linia
-            {
-              firstVisibleLine = currentSelection;
-            }
-          } 
-          else 
-          {  // Jeśli osiągnięto wartość 0, przejdź do najwyższej wartości
-            if (currentSelection == maxSelection())
-            {
-            firstVisibleLine = currentSelection - maxVisibleLines + 1;  // Ustaw pierwszą widoczną linię na najwyższą
-            }
-          }
-             
-        }
-        
-        if (station_nr > stationsCount) 
-	      {
-          station_nr = 1;//stationsCount;
-        }
-        
-        //Serial.println(station_nr);
-
-         
-        displayStations();
-      }    
-      else if (ir_code == rcCmdOk)
-      {
-        if (bankMenuEnable == true)
-        {
-          station_nr = 1;
-          fetchStationsFromServer(); // Ładujemy stacje z karty lub serwera 
-          bankMenuEnable = false;
-        }  
-        if (equalizerMenuEnable == true) { 
-          saveEqualizerOnSD();    // zapis ustawien equalizera (już ma delay i displayRadio)
-          Serial.println("DEBUG: 3-point equalizer settings saved via OK button");
-          // Wyłączamy menu equalizera po zapisie
-          equalizerMenuEnable = false;
-          return; // Kończymy obsługę - nie wykonujemy changeStation()
-        }
-        if (btMenuActive == true) { 
-          // Wybór opcji w menu BT
-          Serial.println("DEBUG BT: OK pressed - selecting menu option");
-          // BT_menuSelect();
-          // BT_displayMenu(u8g2);
-          u8g2.sendBuffer();
-          return; // Kończymy obsługę - nie wykonujemy changeStation()
-        }
-        if (eq16MenuActive == true) { 
-          // Komunikat o zapisie EQ16
-          u8g2.clearBuffer();
-          u8g2.setFont(u8g2_font_fub14_tf);
-          u8g2.drawStr(1, 33, "Saving EQ16 settings");
-          u8g2.sendBuffer();
-          EQ16_autoSave(); 
-          Serial.println("DEBUG: EQ16 settings saved via OK button");
-          // Wyłączamy menu EQ16 po zapisie
-          EQ16_setMenuActive(false);
-          eq16MenuActive = false;
-          delay(1000); // Pokazujemy komunikat przez sekundę
-          displayRadio(); // Powracamy do głównego ekranu
-          return; // Kończymy obsługę - nie wykonujemy changeStation()
-        }
-        //if (volumeSet == true) { saveVolumeOnSD();}                 // zapis ustawien głośnosci po nacisnięciu OK, wyłaczony aby można było przełączyć stacje na www bez czekania
-        //if ((equalizerMenuEnable == false) && (volumeSet == false)) // jesli nie zapisywaliśmy equlizer i glonosci to wywolujemy ponizsze funkcje
-        if ((equalizerMenuEnable == false) && (eq16MenuActive == false)) // jesli nie zapisywaliśmy zadnego equalizera 
-        {
-          // Jesli zadna flaga nie jest ustawiona to:
-          //Serial.print("url2play: ");
-          //Serial.println(url2play);
-          if ((!urlPlaying) || (listedStations)) { changeStation();}
-          if ((rcInputDigitsMenuEnable == true) && (station_nr != stationFromBuffer)) { changeStation();}
-
-          else if (urlPlaying) { webUrlStationPlay();}
-          clearFlags();                                             // Czyscimy wszystkie flagi przebywania w różnych menu
-          if (!EQ16_isMenuActive()) {
-            displayRadio();
-            u8g2.sendBuffer();
-          }
-        }
-        equalizerMenuEnable = false; // Kasujemy flage ustawiania equalizera
-        volumeSet = false; // Kasujemy flage ustawiania głośnosci
-      } 
-      else if (ir_code == rcCmdKey0) {
-        // Sprawdź czy to 3-krotne naciśnięcie dla EQ16
-        unsigned long currentTime = millis();
-        
-        if (currentTime - lastKey0Press > KEY0_TIMEOUT) {
-          // Timeout - reset licznika
-          key0ClickCount = 0;
-        }
-        
-        key0ClickCount++;
-        lastKey0Press = currentTime;
-        
-        Serial.printf("DEBUG: Key0 pressed %d times\n", key0ClickCount);
-        
-        if (key0ClickCount >= 3) {
-          // 3-krotne naciśnięcie - przełącz system EQ (3-punktowy ↔ 16-pasmowy)
-          Serial.println("DEBUG: Triple Key0 press detected - switching EQ system!");
-          key0ClickCount = 0; // Reset licznika
-          
-          // Przełącz między systemami
-          switchEqualizerSystem();
-          
-        } else {
-          // Zwykłe naciśnięcie - normalna funkcja
-          rcInputKey(0);
-        }
-      }
-      else if (ir_code == rcCmdKey1) {rcInputKey(1);}     
-      else if (ir_code == rcCmdKey2) {rcInputKey(2);}     
-      else if (ir_code == rcCmdKey3) {rcInputKey(3);}     
-      else if (ir_code == rcCmdKey4) {rcInputKey(4);}     
-      else if (ir_code == rcCmdKey5) {rcInputKey(5);}     
-      else if (ir_code == rcCmdKey6) {rcInputKey(6);}     
-      else if (ir_code == rcCmdKey7) {rcInputKey(7);}     
-      else if (ir_code == rcCmdKey8) {rcInputKey(8);}     
-      else if (ir_code == rcCmdKey9) {
-        // Sprawdź czy to 3-krotne naciśnięcie dla aktywacji SDPlayer
-        static unsigned long lastKey9Press = 0;
-        static uint8_t key9ClickCount = 0;
-        unsigned long currentTime = millis();
-        
-        if (currentTime - lastKey9Press > 2000) {
-          key9ClickCount = 0; // Timeout - reset licznika
-        }
-        
-        key9ClickCount++;
-        lastKey9Press = currentTime;
-        
-        Serial.printf("DEBUG: Key9 pressed %d times\n", key9ClickCount);
-        
-        if (key9ClickCount >= 3) {
-          // 3-krotne naciśnięcie - aktywuj SDPlayer OLED
-          Serial.println("DEBUG: Triple Key9 press detected - activating SDPlayer!");
-          key9ClickCount = 0; // Reset licznika
-          
-          if (g_sdPlayerOLED && !g_sdPlayerOLED->isActive()) {
-            audio.stopSong(); // Zatrzymaj radio
-            g_sdPlayerOLED->activate();
-            sdPlayerOLEDActive = true;
-            Serial.println("DEBUG: SDPlayer OLED activated");
-          }
-        } else {
-          // Zwykłe naciśnięcie - normalna funkcja
-          rcInputKey(9);
-        }
-      }
-      else if (ir_code == rcCmdBack) 
-      {   
-        displayDimmer(0);
-        clearFlags();   // Zerujemy wszystkie flagi
-        if (!EQ16_isMenuActive()) {
-          displayRadio(); // Ładujemy erkran radia
-          u8g2.sendBuffer(); // Wysyłamy bufor na wyswietlacz
-        }
-        currentSelection = station_nr - 1; // Przywracamy zaznaczenie obecnie grajacej stacji
-      }
-      else if (ir_code == rcCmdMute) 
-      {
-        volumeMute = !volumeMute;
-        if (volumeMute == true)
-        {
-          audio.setVolume(0);   
-        }
-        else if (volumeMute == false)
-        {
-          audio.setVolume(volumeValue);   
-        }
-        if (!EQ16_isMenuActive()) {
-          displayRadio();
-          u8g2.sendBuffer(); // Natychmiastowa aktualizacja ekranu po MUTE
-        }
-        wsVolumeChange(volumeValue);
-      }
-      else if (ir_code == rcCmdDirect) // Przycisk Direct -> Menu Bank - udpate GitHub, Menu Equalizer - reset wartosci, Radio Display - fnkcja przyciemniania ekranu
-      {
-        if ((bankMenuEnable == true) && (equalizerMenuEnable == false))// flage można zmienic tylko bedąc w menu wyboru banku
-        { 
-          bankNetworkUpdate = !bankNetworkUpdate; // zmiana flagi czy aktualizujemy bank z sieci czy karty SD
-          bankMenuDisplay(); 
-        }
-        if ((bankMenuEnable == false) && (equalizerMenuEnable == true))
-        {
-          toneHiValue = 0;
-          toneMidValue = 0;
-          toneLowValue = 0;    
-          displayEqualizer();
-        }
-        if ((bankMenuEnable == false) && (equalizerMenuEnable == false) && (volumeSet == false))
-        { 
-          if (displayMode == 4) // Jesli jestesmy w display Mode 4 czyli duzy VU wsazowkowy to mozna właczyc buffor audio print.
-          {
-            debugAudioBuffor=!debugAudioBuffor;
-          }
-          else
-          {
-            displayDimmer(!displayDimmerActive); // Dimmer OLED
-            Serial.println("Właczono display Dimmer rcCmdDirect");
-          }
-        }
-      }      
-      else if (ir_code == rcCmdRed)   {powerOff();}
-      else if (ir_code == rcCmdPower) {powerOff();}
-      else if (ir_code == rcCmdGreen) {sleepTimerSet();}
-      else if (ir_code == rcCmdBT)  // Przycisk Bluetooth - toggle menu BT
-      {
-        Serial.println("DEBUG: BT button pressed - toggling BT menu (DISABLED - KCX MODULE REMOVED)");
-        /*
-        if (!BT_isMenuActive()) {
-          // Aktywacja menu BT
-          clearFlags();
-          btMenuActive = true;
-          BT_setMenuActive(true);
-          BT_displayMenu(u8g2);
-          u8g2.sendBuffer();
-        } else {
-          // Dezaktywacja menu BT
-          BT_saveConfig();
-          BT_setMenuActive(false);
-          btMenuActive = false;
-          displayRadio();
-          u8g2.sendBuffer();
-        }
-        */
-      }   
-      else if (ir_code == rcCmdBankMinus) 
-      {
-        if (bankMenuEnable == true) 
-        { 
-          bank_nr--; 
-          if (bank_nr < 1) {bank_nr = bank_nr_max;}
-        }       
-        bankMenuDisplay();
-      }
-      else if (ir_code == rcCmdBankPlus) 
-      {
-        
-        if (bankMenuEnable == true)
-        {
-          bank_nr++;
-          if (bank_nr > bank_nr_max) {bank_nr = 1;}
-        }       
-        bankMenuDisplay();       
-      }
-     
-      else if (ir_code == rcCmdSrc) 
-      {
-        Serial.printf("DEBUG: SRC button pressed! rcCmdSrc=0x%04X, ir_code=0x%08X\n", rcCmdSrc, ir_code);
-        // Gdy EQ16 menu jest aktywne, przycisk SRC wyłącza EQ16 i przełącza styl
-        if (EQ16_isMenuActive()) {
-          Serial.println("DEBUG: EQ16 active - SRC button: deactivating EQ16 and changing style");
-          EQ16_setMenuActive(false);
-          eq16MenuActive = false;
-          
-          // Przełącz styl
-          displayMode++;
-          uint8_t maxMode = eqAnalyzerOn ? 6 : displayModeMax;
-          if (displayMode > maxMode) {displayMode = 0;}
-          displayRadio();
-          clearFlags();
-          ActionNeedUpdateTime = true;
-        } else {
-          // Gdy EQ16 nie jest aktywne, normalna zmiana stylu
-          Serial.println("DEBUG: Normal style change");
-          displayMode++;
-          uint8_t maxMode = eqAnalyzerOn ? 6 : displayModeMax;
-          if (displayMode > maxMode) {displayMode = 0;}
-          displayRadio();
-          clearFlags();
-          ActionNeedUpdateTime = true;
-        }
-      }
-      else if (ir_code == rcCmdAud) 
-      {
-        Serial.printf("DEBUG: Audio/EQ button pressed - current system: %s\n", 
-                      useEQ16 ? "16-band EQ" : "3-point EQ");
-        
-        if (useEQ16 && EQ16_isEnabled()) {
-          // System EQ16 - toggle menu
-          if (!EQ16_isMenuActive()) {
-            Serial.println("DEBUG: Activating EQ16 menu");
-            EQ16_setMenuActive(true);
-            eq16MenuActive = true;
-            eq16BandMode = true;
-            EQ16_displayMenu();
-          } else {
-            Serial.println("DEBUG: Deactivating EQ16 menu - saving settings");
-            EQ16_autoSave();
-            EQ16_setMenuActive(false);
-            eq16MenuActive = false;
-            displayRadio();
-          }
-        } else {
-          // System 3-punktowy - toggle menu
-          if (!equalizerMenuEnable) {
-            Serial.println("DEBUG: Activating 3-point equalizer menu");
-            equalizerMenuEnable = true;
-            toneSelect = 1;
-            displayEqualizer();
-          } else {
-            Serial.println("DEBUG: Deactivating 3-point equalizer menu");
-            equalizerMenuEnable = false;
-            applyEqualizerSettings();
-            displayRadio();
-          }
-        }
-      }
-      else { Serial.println("Inny przycisk"); }
-    }
-    else
-    {
-      Serial.println("Błąd - kod pilota NEC jest niepoprawny!");
-      Serial.print("debug IR -> puls 9ms:");
-      Serial.print(pulse_duration_9ms);
-      Serial.print("  4.5ms:");
-      Serial.print(pulse_duration_4_5ms);
-      Serial.print("  1690us:");
-      Serial.print(pulse_duration_1690us);
-      Serial.print("  560us:");
-      Serial.println(pulse_duration_560us);    
-    }
-    ir_code = 0;
-    bit_count = 0;
-    attachInterrupt(digitalPinToInterrupt(recv_pin), pulseISR, CHANGE);
-    
-    // Serial.print("debug-- Czas2 - Czas1 = ");
-    // runTime2 = runTime2 - runTime1;
-    // Serial.println(runTime);
-    // Serial.print("debug-- Kontrola stosu:");
-    // Serial.print(uxTaskGetStackHighWaterMark(NULL));
-    // Serial.println(" DWORD");
-  }
-  
-  
   /*---------------------  FUNKCJA PETLI MILLIS SCROLLER / Odswiezanie VU Meter, Time, Scroller, OLED, WiFi ver. 1 ---------------------*/ 
-  if ((millis() - scrollingStationStringTime > scrollingRefresh) && (displayActive == false)) 
+  if ((millis() - scrollingStationStringTime > scrollingRefresh) && (displayActive == false) && !sdPlayerActive && !sdPlayerOLEDActive) // KRYTYCZNE: Dodano !sdPlayerOLEDActive
   {
     scrollingStationStringTime = millis();
+    
     if (ActionNeedUpdateTime == true) // Aktualizacja zegara, zegar głosowy, debug Audio, sygnał wifi 
     {
       ActionNeedUpdateTime = false;
@@ -11335,96 +12595,104 @@ void loop()
         stationStringFormatting(); // Formatujemy StationString do wyswietlenia przez Scroller
       } 
 
-      if ((f_audioInfoRefreshDisplayRadio == true) && (displayActive == false)) //&& (f_requestVoiceTimePlay == false) Zmiana bitrate - wymaga odswiezenia na wyswietlaczu
+      if (f_audioInfoRefreshDisplayRadio == true && displayActive == false && !sdPlayerOLEDActive) // Blokuj gdy SD Player OLED aktywny
       { 
         f_audioInfoRefreshDisplayRadio = false;
         ActionNeedUpdateTime = true;
-        if (!EQ16_isMenuActive()) {
-          displayRadio();
-        }
+        displayRadio();
       } 
-
+      
       if (wsAudioRefresh == true) // Web Socket StremInfo wymaga odswiezenia
       {
         wsAudioRefresh = false;
         wsStreamInfoRefresh();
       }
+      
     }
 
-    // Obsługa VU meter i analizatora
-    if (vuMeterOn)
-    { 
-      // GUARD: Nie rysuj VU Meter ani analizatora gdy SDPlayer aktywny
-      if (g_sdPlayerOLED && g_sdPlayerOLED->isActive()) {
-        // SDPlayer kontroluje wyświetlacz - pomiń całą sekcję VU/Analyzer
-        return;
-      }
-      
-      // Gdy EQ16 menu jest aktywne, pokaż tylko menu
-      if (EQ16_isMenuActive()) {
-        // EQ16 menu zawsze pokazuje analizator + interface
-        if (displayMode >= 5 && displayMode <= 10) {
-          // Uruchom analizator dla wizualizacji EQ
-          if (displayMode == 5) {vuMeterMode5();}
-          if (displayMode == 6) {vuMeterMode6();}
-          if (displayMode == 7) {vuMeterMode7();}
-          if (displayMode == 8) {vuMeterMode8();}
-          if (displayMode == 9) {vuMeterMode9();}
-          if (displayMode == 10) {vuMeterMode10();}
-        }
-        // Analizator musi działać dla EQ16
-        eq_analyzer_set_runtime_active(true);
-      } else {
-        // Normalny tryb - pełna obsługa VU meter
-        
-        // Style 0, 3, 4 tylko gdy nie mute
-        if (volumeMute == false) {
-          if (displayMode == 0) {vuMeterMode0();}
-          if (displayMode == 3) {vuMeterMode3();}
-          if (displayMode == 4) 
+    if (volumeMute == false) 
+    {
+      if (vuMeterOn)
+      { 
+        if (displayMode == 0) {vuMeterMode0();}
+        if (displayMode == 3) {vuMeterMode3();}
+        if (displayMode == 4) 
+        {
+          vuMeterMode4(); 
+          if (debugAudioBuffor)
           {
-            vuMeterMode4(); 
-            if (debugAudioBuffor)
+            for (int i = 0; i < 10; i++) 
             {
-              for (int i = 0; i < 10; i++) 
-              {
-                int y = 1 + (9 - i) * 6; 
-                if (audioBufferTime > i) { u8g2.drawBox(126, y, 8, 5);} else {u8g2.drawFrame(126, y, 8, 5);}
-              }
+              int y = 1 + (9 - i) * 6; 
+              if (audioBufferTime > i) { u8g2.drawBox(126, y, 8, 5);} else {u8g2.drawFrame(126, y, 8, 5);}
             }
           }
         }
-        
-        // Style 5-10 zawsze (również podczas mute dla animacji)
-        if (displayMode == 5) {vuMeterMode5();}
-        if (displayMode == 6) {vuMeterMode6();}
-        if (displayMode == 7) {vuMeterMode7();}  // Nowy styl: Okrągły
-        if (displayMode == 8) {vuMeterMode8();}  // Nowy styl: Liniowy
-        if (displayMode == 9) {vuMeterMode9();}  // Nowy styl: Spadające gwiazdki jak śnieg
-        if (displayMode == 10) {vuMeterMode10();} // Nowy styl: Floating Peaks - Ulatujące szczyty
-          
-        // Powiedz analizatorowi, że ma spać gdy style 5-10 nie są aktywne
-        if (displayMode < 5 || displayMode > 10) {
-          eq_analyzer_set_runtime_active(false);
+        // STYLE 8 ZEWNĘTRZNY - Analizator 16-pasmowy z zegarem
+        // if (displayMode == 8) {
+        //   // Tryb 8: Analizator FFT 16-pasmowy
+        //   if (analyzerEnabled) {
+        //     eq_analyzer_display_mode5();  // Analizator 16-pasmowy
+        //   } else {
+        //     vuMeterMode8();  // Fallback do VU meter gdy analyzer wyłączony
+        //   }
+        // }
+        else if (displayMode == 6) {
+          // Tryb 6: Segmentowy analyzer
+          vuMeterMode6();
+        }
+        else if (displayMode == 8) {
+          // Tryb 8: VU Meter Mode 8
+          vuMeterMode8();
+        }
+        else if (displayMode == 10) {
+          // Tryb 10: Floating Peaks Analyzer
+          vuMeterMode10();
         }
       }
+      else if (displayMode == 0) {showIP(1,47);} //y = vuRy
     }
-    else if (displayMode == 0) {showIP(1,47);} //y = vuRy
-    else {
-      // Gdy vuMeter jest wyłączony, analizator też może spać
-      eq_analyzer_set_runtime_active(false);
-    }
-
-    // Tylko starsze style (0-4) pokazują napis MUTED - nowe style 5 i 6 mają swoją obsługę mute za ikonką głośnika
-    if (volumeMute && displayMode >= 0 && displayMode <= 4) 
+    else // Obsługa wyciszenia dzwięku, wprowadzamy napis MUTE na ekran
     {
-      u8g2.setDrawColor(0);
-      if (displayMode == 0) {u8g2.drawStr(0,48, "> MUTED <");}
-      if (displayMode == 1) {u8g2.drawStr(200,47, "> MUTED <");}
-      if (displayMode == 2) {u8g2.drawStr(0,48, "> MUTED <");}
-      if (displayMode == 3) {u8g2.drawStr(101,63, "> MUTED <");}
-      if (displayMode == 4) {u8g2.setDrawColor(1); vuMeterMode4(); u8g2.setFont(spleen6x12PL); u8g2.setDrawColor(0); u8g2.drawStr(103,57, "> MUTED <");}
-      u8g2.setDrawColor(1);
+      // Style 0-4: Pokazuj tekst "> MUTED <"
+      if (displayMode == 0) {
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(0,48, "> MUTED <");
+        u8g2.setDrawColor(1);
+      }
+      else if (displayMode == 1) {
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(200,47, "> MUTED <");
+        u8g2.setDrawColor(1);
+      }
+      else if (displayMode == 2) {
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(0,48, "> MUTED <");
+        u8g2.setDrawColor(1);
+      }
+      else if (displayMode == 3) {
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(101,63, "> MUTED <");
+        u8g2.setDrawColor(1);
+      }
+      else if (displayMode == 4) {
+        u8g2.setDrawColor(1);
+        vuMeterMode4();
+        u8g2.setFont(spleen6x12PL);
+        u8g2.setDrawColor(0);
+        u8g2.drawStr(103,57, "> MUTED <");
+        u8g2.setDrawColor(1);
+      }
+      // Style 8, 6, 10: Wywołaj VU Meter Mode z obsługą przekreślonego głośnika
+      else if (displayMode == 8) {
+        vuMeterMode8();
+      }
+      else if (displayMode == 6) {
+        vuMeterMode6();
+      }
+      else if (displayMode == 10) {
+        vuMeterMode10();
+      }
     }  
 
        
@@ -11432,54 +12700,28 @@ void loop()
     {
       urlToPlay = false;
       webUrlStationPlay();
-      if (!EQ16_isMenuActive()) {
+      // KRYTYCZNE: Nie nadpisuj ekranu gdy SDPlayer OLED aktywny
+      if (!sdPlayerOLEDActive) {
         displayRadio();
       }
     }
     
-    // Nie wywołuj displayRadioScroller gdy EQ16 menu jest aktywne  
-    if (!EQ16_isMenuActive()) {
+    // KRYTYCZNE: Nie rysuj radio scrollera gdy SDPlayer aktywny
+    // OPTYMALIZACJA: Display 10 FPS (co 100ms) dla MAKSYMALNEJ przepustowości audio
+    static unsigned long lastDisplayUpdate = 0;
+    if (!sdPlayerOLEDActive && (millis() - lastDisplayUpdate >= 100)) {
       displayRadioScroller();  // wykonujemy przewijanie tekstu station stringi przygotowujemy bufor ekranu
       u8g2.sendBuffer();  // rysujemy całą zawartosc ekranu.
-    }
-    
-    // Serial Commands for CPU monitoring
-    if (Serial.available()) {
-      String command = Serial.readStringUntil('\n');
-      command.trim();
-      if (command == "cpu start" || command == "cpu on") {
-        startCpuMonitoring();
-        Serial.println("CPU monitoring started");
-      } 
-      else if (command == "cpu stop" || command == "cpu off") {
-        stopCpuMonitoring();
-        Serial.println("CPU monitoring stopped");
-      }
-      else if (command == "cpu status") {
-        if (cpuMonitorTask != NULL) {
-          Serial.println("CPU monitoring: ACTIVE");
-        } else {
-          Serial.println("CPU monitoring: INACTIVE");
-        }
-      }
-      else if (command == "mem" || command == "memory") {
-        Serial.printf("Free Heap: %d bytes | Free PSRAM: %d bytes\n", 
-                      ESP.getFreeHeap(), ESP.getFreePsram());
-      }
-      else if (command == "help" || command == "?") {
-        Serial.println("=== CPU Monitor Commands ===");
-        Serial.println("cpu start  - Start CPU monitoring");
-        Serial.println("cpu stop   - Stop CPU monitoring"); 
-        Serial.println("cpu status - Check monitoring status");
-        Serial.println("mem        - Show memory usage");
-        Serial.println("help       - Show this help");
-      }
+      lastDisplayUpdate = millis();
     }
     
     //if (f_callInfo) {f_callInfo = false; displayBasicInfo();}  
     
   }
+  
+  // OCHRONA PRZED WATCHDOG RESET: krótka pauza na końcu loop()
+  yield(); // Pozwala systemowi na obsługę zadań w tle
+  
   //runTime2 = esp_timer_get_time();
-  //runTime = runTime2 - runTime1;  
+  //runTime = runTime2 - runTime1;
 }
-
