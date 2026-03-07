@@ -296,42 +296,30 @@
 
       <div class="card">
         <h3>16. Power Management</h3>
-        <ul>
+     
           <li>Power ON/OFF z animacją</li>
           <li>Light sleep z wakeup</li>
           <li>Sleep timer 0–90 min co 15 min</li>
           <li>Głosowe odtwarzanie czasu co godzinę</li>
           <li>SW_POWER=GPIO8, STANDBY_LED=GPIO17, SPEAKERS_PIN=GPIO18</li>
-        </ul>
-      </div>
+    
 
       <div class="card">
         <h3>17. Zegar NTP</h3>
-        <ul>
+     
           <li>Wyświetlanie czasu na OLED</li>
           <li>Głosowe odtwarzanie czasu</li>
           <li>Tryb zegara podczas sleep</li>
-        </ul>
-      </div>
-
-      <div class="card">
+ 
         <h3>18. WiFi Animation</h3>
-        <ul>
+       
           <li>Animacja gwiazdek podczas łączenia z WiFi</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="section">
+ 
       <h2>2. Podsumowanie pinów</h2>
-      <table>
-        <thead>
-          <tr>
+     
             <th>Funkcja</th>
             <th>GPIO</th>
-          </tr>
-        </thead>
-        <tbody>
+       
           <tr><td>I2S DOUT (PCM5102A)</td><td>13</td></tr>
           <tr><td>I2S BCLK</td><td>12</td></tr>
           <tr><td>I2S LRC</td><td>14</td></tr>
@@ -354,22 +342,10 @@
           <tr><td>Przycisk POWER</td><td>8</td></tr>
           <tr><td>LED Standby/IR</td><td>17</td></tr>
           <tr><td>SPEAKERS enable</td><td>18</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section">
+ 
+   
       <h2>3. Obsługa pilota IR – tabela funkcji</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Kategoria</th>
-            <th>Klawisz</th>
-            <th>Kod NEC</th>
-            <th>Funkcja</th>
-          </tr>
-        </thead>
-        <tbody>
+ 
           <tr><td>Sterowanie dźwiękiem</td><td>VOL+</td><td>0xB914</td><td>Głośność +</td></tr>
           <tr><td>Sterowanie dźwiękiem</td><td>VOL-</td><td>0xB915</td><td>Głośność -</td></tr>
           <tr><td>Sterowanie dźwiękiem</td><td>MUTE</td><td>0xB916</td><td>Wyciszenie / przywrócenie dźwięku</td></tr>
@@ -432,24 +408,11 @@
           <tr><td>Zarezerwowane</td><td>WWW</td><td>0x0000</td><td>Nieprzypisane</td></tr>
           <tr><td>Zarezerwowane</td><td>GAZE</td><td>0x0000</td><td>Nieprzypisane</td></tr>
           <tr><td>Zarezerwowane</td><td>EPG</td><td>0x0000</td><td>Nieprzypisane</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section">
-      <h2>4. Uwagi</h2>
-      <div class="note">
+     
         Domyślne kody ustawiono dla pilota <strong>Kenwood RC-406</strong>. Kody można zmieniać przez WebUI lub plik konfiguracyjny na karcie SD / LittleFS. Pilot pracuje w standardzie <strong>NEC</strong>.
-      </div>
-    </div>
+    
 
-    <div class="footer">
-      Plik HTML przygotowany jako czytelna dokumentacja projektu EVO Internet Radio v3.20.04 MOD.
-    </div>
-  </div>
-</body>
-</html>
-
+      Plik HTML przygotowany jako czytelna dokumentacja projektu
 
 
 
