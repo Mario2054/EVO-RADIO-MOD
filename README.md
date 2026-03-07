@@ -1,18 +1,22 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
-Dodaje modyfikacje do projektu EVO Wersja EVO 3.19.70b MOD SDP_BT_EQ16_ANALIZATOR  SD PLAYER SD RECORDING
-<img width="1045" height="841" alt="image" src="https://github.com/user-attachments/assets/23ca9f13-2d80-4b93-9c70-4e6f4859f072" />
+Dodaje modyfikacje do projektu EVO Wersja EVO 3.20.04 MOD SDP_BT_EQ16_ANALIZATOR  SD PLAYER SD RECORDING DLNA 
 
 Do TESTÓW DODANO SD RECORDING TEST nagrywania wav działą lecz przycina sprawdzcie sami . obsługa z pilota DIRECT/OK REC na panelu radyjka nagrywanie DIRECT/OK KONIEC nagrywania
 
-Poprawiono obsługe listy zminiono napisy poprawiono kilka bledów menu eqalizera 16K jest wywoływane po 00 tam jest przełacznie miedzy EQ3 A EQ16 
-Uruchomienie SDPLARERA AUD AUD i pokazuje sie napis SD PLAYER przycisk up lub down uruchamia ładowanie listy.
+<img width="707" height="471" alt="image" src="https://github.com/user-attachments/assets/47c10274-736e-4965-b44b-cd4f00ef4ac4" />
+
+<img width="404" height="882" alt="image" src="https://github.com/user-attachments/assets/ba32c81e-c158-44a5-8a67-63832afaf8b6" />
+<img width="964" height="895" alt="image" src="https://github.com/user-attachments/assets/ec7b0bbd-67bd-4fc4-b4a2-3b69af4a2b00" />
+
+<img width="641" height="917" alt="image" src="https://github.com/user-attachments/assets/66926200-e75e-4483-94e8-d0a83a2f8096" />
+<img width="953" height="912" alt="image" src="https://github.com/user-attachments/assets/c345bdc0-6391-47ce-903f-0a00db808e79" />
+<img width="932" height="929" alt="image" src="https://github.com/user-attachments/assets/d7890e92-357c-4563-a34c-45104ac45705" />
+<img width="978" height="864" alt="image" src="https://github.com/user-attachments/assets/7092c7ec-bf16-4679-a03b-fab3cebe5171" />
+<img width="710" height="921" alt="image" src="https://github.com/user-attachments/assets/fc1438bb-a9bf-4304-8ee0-6ef203ff936d" />
 
 
-<img width="627" height="909" alt="image" src="https://github.com/user-attachments/assets/b0f14f83-5e70-4521-8c4e-8874791692c0" />
 
-<img width="366" height="905" alt="image" src="https://github.com/user-attachments/assets/6c65bb35-fa0e-49a1-8c80-e45ce4023999" />
-<img width="737" height="902" alt="image" src="https://github.com/user-attachments/assets/bc67c513-2837-47a7-9187-8606348c30f8" />
-<img width="883" height="744" alt="image" src="https://github.com/user-attachments/assets/b3d19d65-0937-4e90-9c10-c64100415bf0" />
-<img width="878" height="424" alt="image" src="https://github.com/user-attachments/assets/16c1b6f0-d576-431c-a647-d4f62200563d" />
-<img width="861" height="758" alt="image" src="https://github.com/user-attachments/assets/1a5b7249-e896-4f2e-b820-9e3051544f89" />
+
+
+
 
