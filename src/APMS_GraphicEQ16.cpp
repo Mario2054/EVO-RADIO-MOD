@@ -85,21 +85,25 @@ void applyToAudio(){
   float lowSum = 0.0f, midSum = 0.0f, highSum = 0.0f;
   float lowWeight = 0.0f, midWeight = 0.0f, highWeight = 0.0f;
   
+  // SKALOWANIE: Pasma [-16..+16] → wyjście [-6..+6] aby nie przekroczyć limitu biblioteki (+6dB max)
+  // Współczynnik 0.5 zapewnia pełny zakres regulacji bez obcinania na +6dB
+  const float GAIN_SCALE = 0.5f;
+  
   // Ważona suma pasm LOW (0-4)
   for(int i=0; i<5; i++) {
-    lowSum += s_gains[i] * lowWeights[i];
+    lowSum += (s_gains[i] * GAIN_SCALE) * lowWeights[i];
     lowWeight += lowWeights[i];
   }
   
   // Ważona suma pasm MID (5-10)
   for(int i=5; i<11; i++) {
-    midSum += s_gains[i] * midWeights[i-5];
+    midSum += (s_gains[i] * GAIN_SCALE) * midWeights[i-5];
     midWeight += midWeights[i-5];
   }
   
   // Ważona suma pasm HIGH (11-15)
   for(int i=11; i<16; i++) {
-    highSum += s_gains[i] * highWeights[i-11];
+    highSum += (s_gains[i] * GAIN_SCALE) * highWeights[i-11];
     highWeight += highWeights[i-11];
   }
   
@@ -109,7 +113,7 @@ void applyToAudio(){
   int8_t highGain = (int8_t)(highSum / highWeight);
   
   // Ograniczenie do zakresu [-40..+6] dB zgodnie z dokumentacją setTone()
-  // Dodatkowo ograniczamy do [-12..+6] dla bezpieczeństwa
+  // Po skalowaniu 0.5 wartości powinny być w [-8..+8], dodatkowo zabezpieczamy do [-12..+6]
   if(lowGain > 6) lowGain = 6;
   if(lowGain < -12) lowGain = -12;
   if(midGain > 6) midGain = 6;
@@ -419,6 +423,13 @@ float EQ16_processSample(float sample, float unused, bool isLeft) {
 void EQ16_saveToSD(void) {
     // Save EQ16 settings to SD card
     Serial.println("DEBUG: Saving EQ16 settings to /eq16.txt");
+    
+    // Wyświetl komunikat na ekranie
+    extern U8G2_SSD1322_NHD_256X64_F_4W_HW_SPI u8g2;
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_fub14_tf);
+    u8g2.drawStr(1, 33, "Saving EQ16K settings");
+    u8g2.sendBuffer();
     
     if (getStorage().exists("/eq16.txt")) {
         getStorage().remove("/eq16.txt"); // Remove old file

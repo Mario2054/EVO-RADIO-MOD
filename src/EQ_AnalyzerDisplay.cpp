@@ -868,7 +868,7 @@ void eqAnalyzerSetFromWeb(bool enabled)
 // STYL 5 – 16 słupków, zegar + ikonka głośnika
 // ─────────────────────────────────────
 
-void vuMeterMode5() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem i ikonką głośnika
+void vuMeterMode5_unused() // Tryb 5: 16 słupków – dynamiczny analizator z zegarem i ikonką głośnika (NIEUŻYWANY)
 {
   // Powiedz analizatorowi, że jest aktywny
   eq_analyzer_set_runtime_active(true);

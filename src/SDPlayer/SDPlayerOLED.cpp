@@ -37,6 +37,9 @@ extern String currentMP3Artist;
 extern String currentMP3Title;
 extern String currentMP3Album;
 
+// Extern funkcja konwersji polskich znaków z main.cpp
+extern void processText(String &text);
+
 // Extern obiekt Audio dla pobierania czasu odtwarzania
 extern Audio audio;
 
@@ -210,6 +213,13 @@ void SDPlayerOLED::deactivate() {
     extern bool timeDisplay;
     displayActive = true;
     timeDisplay = true;
+    
+    // FLAC OPTYMALIZACJA: Wyłącz tryby FLAC i SDPlayer w analizatorze przy wyjściu z SDK Player
+    Serial.println("[SDPLAYER] Deactivating - disabling FLAC and SDPlayer modes in analyzer");
+    extern void eq_analyzer_set_flac_mode(bool enable);
+    extern void eq_analyzer_set_sdplayer_mode(bool enable);
+    eq_analyzer_set_flac_mode(false);
+    eq_analyzer_set_sdplayer_mode(false);
     
     // Reset stanu przy deaktywacji
     _mode = MODE_NORMAL;
@@ -520,6 +530,9 @@ void SDPlayerOLED::renderStyle1() {
         }
     }
     
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
+    
     _display.setFont(spleen6x12PL);  // Większa czcionka dla tytułu
     
     // === GÓRNY PASEK - TYTUŁ UTWORU ===
@@ -593,9 +606,9 @@ void SDPlayerOLED::renderStyle1() {
     _display.drawStr(4, 26, "Codec:");
     _display.drawStr(50, 26, streamCodec.c_str());
     
-    _display.drawStr(4, 38, "Bitrate:");
+    _display.drawStr(12, 38, "Bitrate:");
     String bitrateInfo = bitrateString + "kbps";
-    _display.drawStr(60, 38, bitrateInfo.c_str());
+    _display.drawStr(68, 38, bitrateInfo.c_str());
     
     // Prawa kolumna - czas odtwarzania
     uint32_t currTime = audio.getAudioCurrentTime();
@@ -631,8 +644,8 @@ void SDPlayerOLED::renderStyle1() {
     uint8_t vuR = min(vuRaw & 0xFF, 255);
     
     int vuX = 10;
-    int vuY_L = 46;        // Lewy kanał
-    int vuY_R = 54;        // Prawy kanał
+    int vuY_L = 39;        // Lewy kanał (podniesione z 46 do 39)
+    int vuY_R = 47;        // Prawy kanał (podniesione z 54 do 47)
     int vuWidth = 235;
     int vuHeight = 6;
     
@@ -805,6 +818,9 @@ void SDPlayerOLED::drawFileList() {
         // Nazwa pliku ze scrollowaniem dla zaznaczonego
         String name = _fileList[idx].name;
         
+        // KONWERSJA POLSKICH ZNAKÓW
+        processText(name);
+        
         // Oblicz pozycję X dla tekstu (zależnie od szerokości numeru/ikony)
         int textStartX = 12;  // Domyślna pozycja dla folderów
         if (!_fileList[idx].isDir && trackNumber > 0) {
@@ -934,6 +950,9 @@ void SDPlayerOLED::renderStyle2() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     _display.setFont(spleen6x12PL);
     
@@ -1088,6 +1107,8 @@ void SDPlayerOLED::renderStyle2() {
         
         // Nazwa
         String name = _fileList[idx].name;
+        // KONWERSJA POLSKICH ZNAKÓW
+        processText(name);
         if (name.length() > 48) name = name.substring(0, 47) + "...";
         _display.drawStr(8, y, name.c_str());
         
@@ -1120,6 +1141,9 @@ void SDPlayerOLED::renderStyle3() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     _display.setFont(spleen6x12PL);
     
@@ -1268,6 +1292,9 @@ void SDPlayerOLED::renderStyle4() {
         }
     }
     
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
+    
     // === DUŻY TYTUŁ (większa czcionka) ===
     _display.setFont(spleen6x12PL);
     int titleWidth = _display.getStrWidth(currentFile.c_str());
@@ -1410,11 +1437,15 @@ void SDPlayerOLED::renderStyle4() {
             _display.drawTriangle(2, y-5, 2, y-2, 5, y-3);
             // Nazwa folderu bez numeru
             String name = _fileList[idx].name;
+            // KONWERSJA POLSKICH ZNAKÓW
+            processText(name);
             if (name.length() > 45) name = name.substring(0, 44) + "...";
             _display.drawStr(8, y, name.c_str());
         } else {
             // Numer utworu + nazwa pliku
             String numberedName = String(idx + 1) + ". " + _fileList[idx].name;
+            // KONWERSJA POLSKICH ZNAKÓW
+            processText(numberedName);
             if (numberedName.length() > 43) numberedName = numberedName.substring(0, 42) + "...";
             _display.drawStr(2, y, numberedName.c_str());
         }
@@ -1452,6 +1483,9 @@ void SDPlayerOLED::renderStyle5() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     _display.setFont(spleen6x12PL);
     int titleWidth = _display.getStrWidth(currentFile.c_str());
@@ -1546,6 +1580,9 @@ void SDPlayerOLED::renderStyle6() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     int titleWidth = _display.getStrWidth(currentFile.c_str());
     
@@ -1739,6 +1776,9 @@ void SDPlayerOLED::renderStyle7() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     _display.setFont(spleen6x12PL);
     int titleWidth = _display.getStrWidth(currentFile.c_str());
@@ -1936,6 +1976,7 @@ void SDPlayerOLED::renderStyle8() {
     while (_display.getStrWidth(artistText.c_str()) > 200 && artistText.length() > 10) {
         artistText = artistText.substring(0, artistText.length() - 1);
     }
+    processText(artistText);
     _display.drawStr(14, line1Y, artistText.c_str());
 
     // Volume z ikoną głośniczka
@@ -1975,6 +2016,7 @@ void SDPlayerOLED::renderStyle8() {
     while (_display.getStrWidth(titleText.c_str()) > 200 && titleText.length() > 10) {
         titleText = titleText.substring(0, titleText.length() - 1);
     }
+    processText(titleText);
     _display.drawStr(14, line2Y, titleText.c_str());
 
     int line3Y = 36;
@@ -2003,6 +2045,7 @@ void SDPlayerOLED::renderStyle8() {
     while (_display.getStrWidth(albumText.c_str()) > 230 && albumText.length() > 10) {
         albumText = albumText.substring(0, albumText.length() - 1);
     }
+    processText(albumText);
     _display.drawStr(2, line3Y, albumText.c_str());
 
     _display.drawLine(0, 38, 256, 38);
@@ -2075,6 +2118,9 @@ void SDPlayerOLED::renderStyle9() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     // === GÓRNA CZĘŚĆ: TYTUŁ UTWORU (scrollowany) ===
     _display.setFont(spleen6x12PL);
@@ -2268,6 +2314,9 @@ void SDPlayerOLED::renderStyle10() {
             currentFile = String(trackNumber) + "/" + String(totalTracks) + " " + currentFile;
         }
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     
     int titleWidth = _display.getStrWidth(currentFile.c_str());
     
@@ -3000,6 +3049,23 @@ void SDPlayerOLED::selectCurrent() {
         sdPlayerPlayingMusic = true;
         Serial.println("DEBUG: Playing selected track from SD Player");
         
+        // FLAC OPTYMALIZACJA: Sprawdź czy plik to FLAC i włącz tryb FLAC w analizatorze
+        String fileName = entry.name;
+        fileName.toLowerCase();
+        if (fileName.endsWith(".flac")) {
+            Serial.println("[SDPLAYER] FLAC file detected - enabling FLAC mode in analyzer");
+            extern void eq_analyzer_set_flac_mode(bool enable);
+            extern void eq_analyzer_set_sdplayer_mode(bool enable);
+            eq_analyzer_set_flac_mode(true);
+            eq_analyzer_set_sdplayer_mode(true);  // SDPlayer ma 3x większą dynamikę
+        } else {
+            // Wyłącz tryb FLAC dla innych formatów
+            extern void eq_analyzer_set_flac_mode(bool enable);
+            extern void eq_analyzer_set_sdplayer_mode(bool enable);
+            eq_analyzer_set_flac_mode(false);
+            eq_analyzer_set_sdplayer_mode(true);  // Ale zostaw SDPlayer mode
+        }
+        
         // POZOSTAJEMY w panelu SD Player OLED - nie wychodzimy automatycznie
         Serial.println("DEBUG: Music started from SD - staying in SD Player panel");
     }
@@ -3077,6 +3143,76 @@ void SDPlayerOLED::nextStyle() {
 void SDPlayerOLED::setStyle(DisplayStyle style) {
     _style = style;
 }
+
+void SDPlayerOLED::prevStyle() {
+    DisplayStyle startStyle = _style;
+    int attempts = 0;
+    const int maxAttempts = 15;  // Maksymalnie 14 stylów + 1 na powrót do startu
+    
+    do {
+        // Przejdź do poprzedniego stylu w sekwencji
+        switch (_style) {
+            case STYLE_1: _style = STYLE_14; break;
+            case STYLE_2: _style = STYLE_1; break;
+            case STYLE_3: _style = STYLE_2; break;
+            case STYLE_4: _style = STYLE_3; break;
+            case STYLE_5: _style = STYLE_4; break;
+            case STYLE_6: _style = STYLE_5; break;
+            case STYLE_7: _style = STYLE_6; break;
+            case STYLE_8: _style = STYLE_7; break;
+            case STYLE_9: _style = STYLE_8; break;
+            case STYLE_10: _style = STYLE_9; break;
+            case STYLE_11: _style = STYLE_10; break;
+            case STYLE_12: _style = STYLE_11; break;
+            case STYLE_13: _style = STYLE_12; break;
+            case STYLE_14: _style = STYLE_13; break;
+        }
+        
+        // Sprawdź czy nowy styl jest włączony
+        bool styleEnabled = false;
+        switch (_style) {
+            case STYLE_1: styleEnabled = sdPlayerStyle1Enabled; break;
+            case STYLE_2: styleEnabled = sdPlayerStyle2Enabled; break;
+            case STYLE_3: styleEnabled = sdPlayerStyle3Enabled; break;
+            case STYLE_4: styleEnabled = sdPlayerStyle4Enabled; break;
+            case STYLE_5: styleEnabled = sdPlayerStyle5Enabled; break;
+            case STYLE_6: styleEnabled = sdPlayerStyle6Enabled; break;
+            case STYLE_7: styleEnabled = sdPlayerStyle7Enabled; break;
+            case STYLE_8: styleEnabled = true; break;
+            case STYLE_9: styleEnabled = sdPlayerStyle9Enabled; break;
+            case STYLE_10: styleEnabled = sdPlayerStyle10Enabled; break;
+            case STYLE_11: styleEnabled = sdPlayerStyle11Enabled; break;
+            case STYLE_12: styleEnabled = sdPlayerStyle12Enabled; break;
+            case STYLE_13: styleEnabled = sdPlayerStyle13Enabled; break;
+            case STYLE_14: styleEnabled = sdPlayerStyle14Enabled; break;
+        }
+        
+        attempts++;
+        
+        // Jeśli styl włączony lub przekroczono limit prób, wyjdź z pętli
+        if (styleEnabled || attempts >= maxAttempts) {
+            break;
+        }
+        
+    } while (_style != startStyle);  // Kontynuuj aż znajdziesz włączony styl lub wrócisz do startu
+    
+    Serial.printf("SDPlayer: Changed to PREV style %d (enabled=%d)\n", _style, 
+                  (_style == STYLE_1 ? sdPlayerStyle1Enabled :
+                   _style == STYLE_2 ? sdPlayerStyle2Enabled :
+                   _style == STYLE_3 ? sdPlayerStyle3Enabled :
+                   _style == STYLE_4 ? sdPlayerStyle4Enabled :
+                   _style == STYLE_5 ? sdPlayerStyle5Enabled :
+                   _style == STYLE_6 ? sdPlayerStyle6Enabled :
+                   _style == STYLE_7 ? sdPlayerStyle7Enabled :
+                   _style == STYLE_8 ? true :
+                   _style == STYLE_9 ? sdPlayerStyle9Enabled :
+                   _style == STYLE_10 ? sdPlayerStyle10Enabled :
+                   _style == STYLE_11 ? sdPlayerStyle11Enabled :
+                   _style == STYLE_12 ? sdPlayerStyle12Enabled :
+                   _style == STYLE_13 ? sdPlayerStyle13Enabled :
+                   sdPlayerStyle14Enabled));
+}
+
 // ========== STYLE 11 - Bazujący na Radio Mode 0 (podstawowy) ==========
 void SDPlayerOLED::renderStyle11() {
     // STYL 11: RADIO MODE 0 - dokładnie jak tryb 0 radyjka z DUŻĄ CZCIONKĄ i scrolling nazwą
@@ -3111,6 +3247,10 @@ void SDPlayerOLED::renderStyle11() {
     
     // DUŻA CZCIONKA dla nazwy pliku u góry (jak w trybie 0 radyjka) - TYLKO skrócona
     _display.setFont(spleen6x12PL);
+    
+    // KONWERSJA POLSKICH ZNAKÓW przed wyświetleniem
+    processText(currentFile);
+    
     if (currentFile.length() <= 15) {
         // Krótka nazwa - wyświetl całą
         _display.drawStr(24, 16, currentFile.c_str());
@@ -3291,6 +3431,9 @@ void SDPlayerOLED::renderStyle12() {
     if (fileExt == "") fileExt = "---";
     _display.drawStr(235, 47, fileExt.c_str());
     
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(fileName);
+    
     // DOLNA LINIA: Scrolling nazwa utworu (pełna szerokość - format już wyświetlony w linii 47)
     int trackNum = getTrackNumber(originalFile12);
     if (trackNum == 0) trackNum = _selectedIndex + 1;  // Fallback
@@ -3344,6 +3487,8 @@ void SDPlayerOLED::renderStyle13() {
     if (currentFile.length() > 35) {
         currentFile = currentFile.substring(0, 32) + "...";
     }
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(currentFile);
     _display.drawStr(23, 11, currentFile.c_str());
     
     // Status odtwarzania w środku (linijka 2)
@@ -3483,6 +3628,10 @@ void SDPlayerOLED::renderStyle14() {
     if (displayName.length() > 20) {
         displayName = displayName.substring(0, 17) + "...";
     }
+    
+    // KONWERSJA POLSKICH ZNAKÓW
+    processText(displayName);
+    processText(fileName);
     
     _display.setFont(spleen6x12PL); // Polska czcionka dla nazw utworów
     int nameWidth = _display.getStrWidth(displayName.c_str());

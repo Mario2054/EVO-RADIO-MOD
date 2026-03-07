@@ -77,6 +77,7 @@ public:
     void setStyle(DisplayStyle style);
     DisplayStyle getStyle() { return _style; }
     void nextStyle();  // Przełączanie do następnego stylu
+    void prevStyle();  // Przełączanie do poprzedniego stylu
     
     // Style informacji na górnym pasku
     enum InfoStyle {
