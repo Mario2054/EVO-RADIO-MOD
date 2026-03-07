@@ -4,7 +4,8 @@ Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_r
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/4c3a4ddd-0f43-42c4-b4f9-a6b0cde6a7ae" />
 
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/1d590108-eb60-400f-a4f1-a78416d67829" />
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/f2fcaac8-8e80-4609-8468-69d82701b502" />
+
 
 
 
