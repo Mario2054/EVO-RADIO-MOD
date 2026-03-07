@@ -7193,6 +7193,8 @@ void volumeDisplay()
   }
 
 
+void updateSpeakersPin(); // forward declaration
+
 // ---- GŁOSNIEJ +1 ----
 void volumeUp()
 {
@@ -7205,6 +7207,7 @@ void volumeUp()
 
   if (volumeValue > maxVolume) {volumeValue = maxVolume;}
   audio.setVolume(volumeValue);  // zakres 0...21 lub 0...42
+  updateSpeakersPin(); // Przywróć wzmacniacz jeśli był wyciszony
   volumeDisplay();
 }
 
@@ -7220,6 +7223,7 @@ void volumeDown()
   volumeValue--;
   if (volumeValue < 1) {volumeValue = 1;}
   audio.setVolume(volumeValue);  // zakres 0...21 lub 0...42
+  updateSpeakersPin(); // Przywróć wzmacniacz jeśli był wyciszony
   volumeDisplay();
 }
 
@@ -10833,6 +10837,7 @@ void handleRemote()
             Serial.printf("[SDPlayer] MUTE OFF (vol=%d)\n", restoreVolume);
           }
 
+          updateSpeakersPin(); // GPIO18: LOW przy mute, HIGH przy unmute
           wsVolumeChange();
         }
         else if (ir_code == rcCmdAud) {
