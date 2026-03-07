@@ -1,7 +1,7 @@
 Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
 Dodaje modyfikacje do projektu EVO Wersja EVO 3.20.04 MOD SDP_BT_EQ16_ANALIZATOR  SD PLAYER SD RECORDING DLNA 
 
- Firmware EVO Internet Radio v3.20.04
+ Firmware EVO Internet Radio v3.20.04 MOD
 1. Odtwarzanie radia internetowego (Internet Radio)
 17 banków stacji, do 99 stacji na bank
 Pobieranie list stacji z GitHub (bank01.txt – bank17.txt)
