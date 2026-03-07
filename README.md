@@ -4,6 +4,9 @@ Dodaje modyfikacje do projektu EVO Wersja EVO 3.20.04 MOD SDP_BT_EQ16_ANALIZATOR
 
 Firmware EVO Internet Radio v3.20.04 MOD 
 
+<img width="1800" height="2825" alt="evo_firmware_funkcje_1_18_infografika" src="https://github.com/user-attachments/assets/432db916-fa3d-47a0-bf7e-9434105a7346" />
+
+
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55d0d6c-302d-4a52-9b5c-a9486701f2c7" />
 
 
