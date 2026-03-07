@@ -1,4 +1,8 @@
-Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main . Dodaje modyfikacje do projektu EVO Wersja EVO 3.20.04 MOD SDP_BT_EQ16_ANALIZATOR SD PLAYER SD RECORDING DLNA Firmware EVO Internet Radio v3.20.04 MOD 
+Projekt oparty na orginalnym oprogramowaniu https://github.com/dzikakuna/ESP32_radio_evo3/tree/main .
+
+Dodaje modyfikacje do projektu EVO Wersja EVO 3.20.04 MOD SDP_BT_EQ16_ANALIZATOR SD PLAYER SD RECORDING DLNA 
+
+Firmware EVO Internet Radio v3.20.04 MOD 
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/b55d0d6c-302d-4a52-9b5c-a9486701f2c7" />
 
