@@ -103,7 +103,85 @@ Przycisk POWER	8
 LED Standby/IR	17
 SPEAKERS enable	18
 
-Do TESTÓW DODANO SD RECORDING TEST nagrywania wav działą lecz przycina sprawdzcie sami . obsługa z pilota DIRECT/OK REC na panelu radyjka nagrywanie DIRECT/OK KONIEC nagrywania
+Obsługa Pilota :
+
+Klawisze pilota IR – wszystkie funkcje (domyślne kody NEC)
+Sterowanie dźwiękiem
+Klawisz	Kod NEC	Funkcja
+VOL+	0xB914	Głośność +
+VOL-	0xB915	Głośność -
+MUTE	0xB916	Wyciszenie / przywrócenie dźwięku (toggle)
+Nawigacja stacji i banków
+Klawisz	Kod NEC	Funkcja
+→ (prawo)	0xB90B	Radio: następna stacja / Menu Bank: bank+1 / Equalizer: parametr+
+← (lewo)	0xB90A	Radio: poprzednia stacja / Menu Bank: bank-1 / Equalizer: parametr-
+↑ (góra)	0xB987	Radio/SDPlayer: lista stacji/utworów – krok w górę / Equalizer: poprzedni parametr
+↓ (dół)	0xB986	Radio/SDPlayer: lista stacji/utworów – krok w dół / Equalizer: następny parametr
+OK / ENT	0xB90E	Zatwierdzenie wyboru (stacja, bank, equalizer, URL)
+BACK	0xB985	Powrót do głównego ekranu / Zatrzymuje nagrywanie jeśli aktywne
+BANK-	0xB90C	Otwiera menu wyboru banku / W menu: bank-1 (z zawijaniem)
+BANK+	0xB90D	Otwiera menu wyboru banku / W menu: bank+1 (z zawijaniem)
+Cyfry 0–9 (wielocyfrowe, timeout 3s)
+Klawisz	Kod NEC	Funkcja
+0	0xB900	EQ: toggle EQ3 ↔ EQ16 / Radio+SDPlayer: wybór stacji/utworu (cyfra)
+1	0xB901	Radio/SDPlayer: stacja/utwór nr 1 lub pierwsza cyfra liczby 1x
+2	0xB902	Radio/SDPlayer: stacja/utwór nr 2 lub pierwsza cyfra liczby 2x
+3	0xB903	Radio/SDPlayer: stacja/utwór nr 3 lub pierwsza cyfra liczby 3x
+4	0xB904	Radio/SDPlayer: stacja/utwór nr 4 lub pierwsza cyfra liczby 4x
+5	0xB905	Radio/SDPlayer: stacja/utwór nr 5 lub pierwsza cyfra liczby 5x
+6	0xB906	Radio/SDPlayer: stacja/utwór nr 6 lub pierwsza cyfra liczby 6x
+7	0xB907	Radio/SDPlayer: stacja/utwór nr 7 lub pierwsza cyfra liczby 7x
+8	0xB908	Radio/SDPlayer: stacja/utwór nr 8 lub pierwsza cyfra liczby 8x
+9	0xB909	Radio/SDPlayer: stacja/utwór nr 9 lub pierwsza cyfra liczby 9x
+Tryby wyświetlacza i equalizera
+Klawisz	Kod NEC	Funkcja
+SRC	0xB913	Zmiana trybu wyświetlacza OLED (0–8, pomija wyłączone style)
+AUD	0xB917	Equalizer 3-band/16-band / Podwójne kliknięcie (600ms): aktywacja SDPlayer
+PIP	0xB9A8	Przełączenie Equalizer EQ3 ↔ EQ16
+DIRECT	0xB90F	Radio: toggle nagrywania / Menu Bank: GitHub/SD / EQ: reset / Mode4: debug audio buffer / Inne: dimmer OLED
+CH+	0xB9A3	Zwiększ jasność OLED o 20 (zakres 10–255)
+CH-	0xB9A4	Zmniejsz jasność OLED o 20 (zakres 10–255)
+Power i sleep
+Klawisz	Kod NEC	Funkcja
+RED (czerwona słuchawka)	0xB988	Power OFF (z animacją jeśli włączona)
+POWER	0xB988	Power OFF (alias RED, ten sam kod)
+GREEN (zielona słuchawka)	0xB992	W liście stacji: odtwórz głosowy czas / Poza listą: sleep timer (0–90 min, krok 15 min)
+Analyzer i nagrywanie
+Klawisz	Kod NEC	Funkcja
+YELLOW	0xB993	Toggle Analyzer ON/OFF (analizator spektrum FFT)
+BLUE / REC	0xB994	Nagrywanie strumienia radiowego toggle START/STOP (plik MP3 na SD /recordings/)
+SDPlayer – odtwarzacz plików SD
+Klawisz	Kod NEC	Funkcja
+HELP	0xB9A7	Toggle SDPlayer ON/OFF (aktywacja/dezaktywacja odtwarzacza)
+PLAY	0xB996	SDPlayer: uruchomienie odtwarzania
+STOP	0xB997	SDPlayer: zatrzymanie odtwarzania
+PAUSE / WELEMENT	0xB9A0 / 0xB9AB	SDPlayer: pauza/wznowienie (toggle)
+REV	0xB998	SDPlayer: przewiń -10s / Podwójne kliknięcie: poprzedni utwór
+RER	0xB999	SDPlayer: przewiń +10s / Podwójne kliknięcie: następny utwór
+RADIO	0xB99A	SDPlayer: wyjście i powrót do trybu Radio
+EXIT	0xB99D	SDPlayer: wyjście i powrót do radia (alias RADIO)
+FILES / MENU	0xB99B / 0xB99C	SDPlayer: wyświetlenie listy plików/folderów (/music/)
+MINIMA	0xB9A9	SDPlayer: następny styl wyświetlania (1→2→...→14→1, pomija wyłączone)
+MAXIMA	0xB9AA	SDPlayer: zmiana stylu wyświetlania
+WINPOD	0xB9AC	SDPlayer: STOP (zatrzymuje, resetuje pozycję)
+BT	0xB995	W Radio: otwiera stronę BT (/bt) / W SDPlayer: zmiana stylu (1–14)
+Moduł Bluetooth UART
+Klawisz	Kod NEC	Funkcja
+KOL	0xB99E	Moduł BT: toggle ON/OFF (włącz/wyłącz moduł Bluetooth UART)
+CHAT	0xB99F	Moduł BT: wyświetl status na OLED (włączony/wyłączony + IP/bt)
+REDLEFT	0xB9A1	Moduł BT: restart modułu (eksperymentalne)
+GREENL	0xB9A2	Moduł BT: test połączenia (wyświetla status modułu)
+INFO	0xB9A5	Moduł BT: wyświetl informacje o module (status, config /bt)
+POWROT / GLOS	0xB9A6 / 0xB9AD	Moduł BT: otwiera stronę BT w przeglądarce (IP/bt)
+Zarezerwowane (nieaktywne)
+Klawisz	Kod NEC	Funkcja
+TV	0x0000	Zarezerwowane – nieprzypisane
+WWW	0x0000	Zarezerwowane – nieprzypisane
+GAZE	0x0000	Zarezerwowane – nieprzypisane
+EPG	0x0000	Zarezerwowane – nieprzypisane
+Uwaga: Domyślne kody są ustawione dla pilota Kenwood RC-406. Wszystkie kody można własnoręcznie skonfigurować przez WebUI lub plik konfiguracyjny na karcie SD/LittleFS (pilot w standardzie NE
+
+
 
 <img width="707" height="471" alt="image" src="https://github.com/user-attachments/assets/47c10274-736e-4965-b44b-cd4f00ef4ac4" />
 
