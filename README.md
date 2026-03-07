@@ -16,6 +16,9 @@ Firmware EVO Internet Radio v3.20.04 MOD
 
 <img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/f2fcaac8-8e80-4609-8468-69d82701b502" />
 
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/4741df2f-29d0-43c5-8c8e-fb6a3ff821c7" />
+
+
 
 
 
