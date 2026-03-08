@@ -102,6 +102,13 @@ static const char SDPLAYER_HTML[] PROGMEM = R"HTML(
   .delete-btn:hover { background: #d32f2f; transform: scale(1.05); }
   .delete-btn:active { transform: scale(0.95); }
   
+  /* DLNA Button */
+  .dlna-btn { background: linear-gradient(135deg, #6a1b9a, #9c27b0) !important; border: 1px solid #ce93d8 !important; }
+  .dlna-btn:hover { background: linear-gradient(135deg, #9c27b0, #ba68c8) !important; transform: translateY(-2px) !important; }
+  .dlna-btn.active { background: linear-gradient(135deg, #1b5e20, #2e7d32) !important; border-color: #a5d6a7 !important; }
+  .dlna-bar { background: rgba(106,27,154,0.25); border: 1px solid #9c27b0; border-radius: 8px; padding: 8px 14px; margin-top: 10px; display: none; font-size: 13px; color: #e1bee7; }
+  .dlna-bar.show { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  
   /* Keyboard Track Selection */
   .track-selector { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); color: white; padding: 20px 30px; border-radius: 12px; font-size: 24px; font-weight: bold; border: 2px solid #4CAF50; display: none; z-index: 1000; box-shadow: 0 8px 32px rgba(0,0,0,0.8); }
   .track-selector.show { display: block; animation: fadeIn 0.2s ease; }
@@ -196,6 +203,13 @@ static const char SDPLAYER_HTML[] PROGMEM = R"HTML(
           <button class="ctrl-btn util-btn" onclick="post('/sdplayer/api/up')">📁 Up Dir</button>
           <button class="ctrl-btn util-btn" onclick="refresh()">🔄 Refresh</button>
           <button class="ctrl-btn util-btn" onclick="post('/sdplayer/api/nextStyle')">🎨 Style</button>
+          <button class="ctrl-btn dlna-btn" id="dlnaBtn" onclick="dlnaAction()">📡 DLNA</button>
+        </div>
+        <!-- DLNA info bar (widoczna gdy tryb DLNA aktywny) -->
+        <div class="dlna-bar" id="dlnaBar">
+          <span>📡 TRYB DLNA</span>
+          <span id="dlnaTrackCount">0 utworów</span>
+          <button class="ctrl-btn util-btn" style="padding:4px 10px;font-size:12px" onclick="dlnaBack()">⬅ Wróć do SD</button>
         </div>
         
         <!-- NOWY: Przełącznik stylów OLED -->
@@ -740,15 +754,17 @@ function render() {
         } else {
           // Music file with track number - IMPROVED with better numbering
           const trackDisplay = trackNum.toString().padStart(2, '0'); // 01, 02, 03...
+          const isStream = item.s === true;
+          const fileIcon = isStream ? '📡' : '🎵';
           
-          // Pokaż przycisk DELETE tylko w folderze RECORDINGS
+          // Pokaż przycisk DELETE tylko w folderze RECORDINGS (nie dla DLNA streamów)
           const isRecordingsFolder = (data.cwd || '').includes('/RECORDINGS');
-          const deleteButton = isRecordingsFolder ? 
+          const deleteButton = (isRecordingsFolder && !isStream) ? 
             `<button class="delete-btn" onclick="event.stopPropagation(); deleteFile('${item.n}')" title="Delete recording">🗑️</button>` : '';
           
           fileItem.innerHTML = `
             <div class="track-number" title="Press ${trackNum} to play">${trackDisplay}.</div>
-            <div class="file-icon">🎵</div>
+            <div class="file-icon">${fileIcon}</div>
             <div class="file-name">${item.n}</div>
             ${deleteButton}
           `;
@@ -837,6 +853,86 @@ function updateStyleInfo(styleNumber) {
 // Pobierz aktualny styl przy ładowaniu
 setTimeout(getCurrentStyle, 1000);
 
+// ===== DLNA INTEGRACJA =====
+let dlnaModeActive = false;
+
+async function dlnaAction() {
+  if (dlnaModeActive) {
+    // Już w trybie DLNA - nic nie rób (użyj "Wróć do SD")
+    showDlnaBar(true);
+    return;
+  }
+  // Sprawdź status DLNA
+  try {
+    const r = await fetch('/sdplayer/api/dlna_status');
+    const d = await r.json();
+    if (!d.enabled) {
+      alert('DLNA nie jest skompilowane (USE_DLNA wyłączone).');
+      return;
+    }
+    if (!d.ready) {
+      if (confirm('Brak playlisty DLNA.\nChcesz przejść do panelu DLNA aby ją zbudować?')) {
+        window.location.href = '/dlna';
+      }
+      return;
+    }
+    if (!confirm('Załadować ' + d.tracks + ' utworów z serwera DLNA do SDPlayera?')) return;
+    const r2 = await fetch('/sdplayer/api/dlna_load', {method: 'POST'});
+    const d2 = await r2.json();
+    if (d2.ok) {
+      dlnaModeActive = true;
+      document.getElementById('dlnaBtn').classList.add('active');
+      document.getElementById('dlnaBtn').innerText = '📡 DLNA ✓';
+      showDlnaBar(true, d2.tracks);
+      refresh();
+    } else {
+      alert('Błąd ładowania DLNA: ' + (d2.err || 'nieznany'));
+    }
+  } catch(e) {
+    alert('Błąd połączenia: ' + e);
+  }
+}
+
+async function dlnaBack() {
+  if (!confirm('Wrócić do listy plików SD i wyłączyć tryb DLNA?')) return;
+  try {
+    await fetch('/sdplayer/api/dlna_back', {method: 'POST'});
+    dlnaModeActive = false;
+    document.getElementById('dlnaBtn').classList.remove('active');
+    document.getElementById('dlnaBtn').innerText = '📡 DLNA';
+    showDlnaBar(false);
+    refresh();
+  } catch(e) {
+    console.error('dlnaBack error:', e);
+  }
+}
+
+function showDlnaBar(visible, tracks) {
+  const bar = document.getElementById('dlnaBar');
+  if (visible) {
+    bar.classList.add('show');
+    if (tracks !== undefined) {
+      document.getElementById('dlnaTrackCount').innerText = tracks + ' utworów';
+    }
+  } else {
+    bar.classList.remove('show');
+  }
+}
+
+// Przy ładowaniu strony - sprawdź czy tryb DLNA był aktywny
+fetch('/sdplayer/api/dlna_status')
+  .then(r => r.json())
+  .then(d => {
+    if (d.enabled && d.dlna_active) {
+      dlnaModeActive = true;
+      document.getElementById('dlnaBtn').classList.add('active');
+      document.getElementById('dlnaBtn').innerText = '📡 DLNA ✓';
+      showDlnaBar(true, d.tracks);
+    }
+  })
+  .catch(() => {});
+// ===== KONIEC DLNA =====
+
 refresh();
 refreshTimer = setInterval(refresh, 3000); // Refresh every 3 seconds
 </script>
@@ -922,8 +1018,11 @@ private:
     struct FileItem {
         String name;
         bool isDir;
+        bool isStream = false;   // DLNA strumień HTTP
+        String streamUrl;        // URL strumienia (tylko gdy isStream=true)
     };
     std::vector<FileItem> _fileList;
+    bool _dlnaMode = false;  // True = lista z DLNA (nie z SD)
     
     void scanCurrentDirectory();
     void buildFileList(JsonArray& items);
@@ -952,4 +1051,9 @@ private:
     
     // Usuwanie plików (RECORDINGS)
     void handleDelete(AsyncWebServerRequest *request);
+
+    // DLNA integracja
+    void handleDlnaStatus(AsyncWebServerRequest *request);
+    void handleDlnaLoad(AsyncWebServerRequest *request);
+    void handleDlnaBack(AsyncWebServerRequest *request);
 };
