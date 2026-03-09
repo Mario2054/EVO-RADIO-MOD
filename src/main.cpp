@@ -6023,8 +6023,8 @@ void vuMeterMode0()
   //vuMeterL = constrain(vuMeterL, 0, 243);
   //vuMeterR = constrain(vuMeterR, 0, 243);
 
-  vuMeterR = map(vuMeterR, 0, 255, 0, 243);
-  vuMeterL = map(vuMeterL, 0, 255, 0, 243);  // 244 VU + start od x=10 +  peak hold 2px
+  vuMeterR = map(vuMeterR, 0, 191, 0, 243); // skalowanie +1/3: 127/191*243=161 zamiast 121
+  vuMeterL = map(vuMeterL, 0, 191, 0, 243); // 244 VU + start od x=10 +  peak hold 2px
 
 
   if (vuSmooth)
@@ -6260,8 +6260,8 @@ void vuMeterMode3()
   vuMeterR = min(raw & 0x7F, 127);         // Clamp right 0-127
   vuMeterL = min((raw >> 8) & 0x7F, 127);  // Clamp left 0-127
 
-  vuMeterR = map(vuMeterR, 0, 255, 0, 127);
-  vuMeterL = map(vuMeterL, 0, 255, 0, 127);
+  vuMeterR = map(vuMeterR, 0, 191, 0, 127); // skalowanie +1/3
+  vuMeterL = map(vuMeterL, 0, 191, 0, 127);
 
   // Wygładzanie
   if (vuSmooth)
@@ -6361,9 +6361,9 @@ void vuMeterMode4() // Mode4 eksperymetn z duzymi wskaznikami VU
   uint8_t rawL = min((raw >> 8) & 0x7F, 127);  // Clamp left 0-127
   uint8_t rawR = min(raw & 0x7F, 127);         // Clamp right 0-127
 
-  // Skalowanie do 0–100
-  int vuL = map(rawL, 0, 255, 0, 100);
-  int vuR = map(rawR, 0, 255, 0, 100);
+  // Skalowanie do 0–100 (+1/3: zakres 0-191 zamiast 0-255)
+  int vuL = map(rawL, 0, 191, 0, 100);
+  int vuR = map(rawR, 0, 191, 0, 100);
 
   // Bezwładność analogowa
   if (vuSmooth) {
@@ -6479,8 +6479,8 @@ void vuMeterMode5() // Mode5 – VU analogowe z prostokątną skalą
   uint8_t rawL = audio.getVUlevel() >> 8;
   uint8_t rawR = audio.getVUlevel() & 0xFF;
 
-  int vuL = map(rawL, 0, 255, 0, 100);
-  int vuR = map(rawR, 0, 255, 0, 100);
+  int vuL = map(rawL, 0, 191, 0, 100); // skalowanie +1/3
+  int vuR = map(rawR, 0, 191, 0, 100);
 
   if (vuL < 1) vuL = 1;
   if (vuR < 1) vuR = 1;
@@ -6655,8 +6655,8 @@ void vuMeterMode7() // Mode7 - Duże paski VU na cały ekran
   u8g2.clearBuffer(); // Wyczyść cały bufor ekranu przed rysowaniem
   
   uint16_t raw = audio.getVUlevel();
-  vuMeterL = (raw >> 8) & 0xFF;
-  vuMeterR = raw & 0xFF;
+  vuMeterL = min(255, (int)(((raw >> 8) & 0xFF) * 4 / 3)); // skalowanie +1/3
+  vuMeterR = min(255, (int)((raw & 0xFF) * 4 / 3));
 
   if (vuMeterR < 1) vuMeterR = 0;
   if (vuMeterL < 1) vuMeterL = 0;
