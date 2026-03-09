@@ -523,8 +523,9 @@ bool noSDcard = false;              // flaga ustawiana przy braku wykrycia karty
 bool noStorage = false;             // flaga ustawiana przy problemie z pamiecia SPIFFS/LittleFS
 
 unsigned long debounceDelay = 300;    // Czas trwania debouncingu w milisekundach
-unsigned long displayTimeout = 5500;  // Czas wyświetlania komunikatu na ekranie w milisekundach
-unsigned long displayStartTime = 0;   // Czas rozpoczęcia wyświetlania komunikatu
+unsigned long displayTimeout = 3000;     // Czas wyświetlania komunikatu na ekranie w milisekundach
+unsigned long shortDisplayTimeout = 1500; // Krótki timeout dla zmiany głośności/stacji pilotem IR
+unsigned long displayStartTime = 0;      // Czas rozpoczęcia wyświetlania komunikatu
 unsigned long seconds = 0;            // Licznik sekund timera
 unsigned int PSRAM_lenght = MAX_STATIONS * (STATION_NAME_LENGTH) + MAX_STATIONS; // deklaracjia długości pamięci PSRAM
 unsigned long lastCheckTime = 0;      // No stream audio blink
@@ -555,8 +556,8 @@ bool vuMeterOn = true;                     // Flaga właczajaca wskazniki VU
 bool vuMeterMode = false;                  // tryb rysowania vuMeter
 uint8_t displayVuL = 0;                    // wartosc VU do wyswietlenia po procesie smooth
 uint8_t displayVuR = 0;                    // wartosc VU do wyswietlenia po procesie smooth
-uint8_t vuRiseSpeed = 24;                  // szybkość narastania VU
-uint8_t vuFallSpeed = 6;                   // szybkość opadania VU
+uint8_t vuRiseSpeed = 32;                  // szybkość narastania VU
+uint8_t vuFallSpeed = 10;                  // szybkość opadania VU
 bool vuSmooth = 1;                         // Flaga zalaczenia funkcji smootht (domyslnie wlaczona=1)
 uint8_t vuRiseNeedleSpeed = 2;             // szybkość narastania VU igły analogowej
 uint8_t vuFallNeedleSpeed = 6;             // szybkość opadania VU igły analogowej
@@ -573,7 +574,7 @@ uint8_t volumeFadeOutTime = 25; //ms * volumeValue
 uint8_t volumeSleepFadeOutTime = 50;
 
 unsigned long scrollingStationStringTime;  // Czas do odswiezania scorllingu
-uint8_t scrollingRefresh = 50;              // Czas w ms przewijania tekstu funkcji Scroller
+uint8_t scrollingRefresh = 35;              // Czas w ms przewijania tekstu funkcji Scroller
 
 uint8_t vuMeterRefreshCounterSet = 0;      // Mnoznik co ile petli loopRefreshTime ma byc odswiezony VU Meter
 uint8_t scrollerRefreshCounterSet = 0;     // Mnoznik co ile petli loopRefreshTime ma byc odswiezony i przewiniety o 1px Scroller
@@ -584,7 +585,7 @@ uint16_t offset;                           // Zminnna offsetu dla funkcji Scroll
 unsigned char * psramData;                 // zmienna do trzymania danych stacji w pamieci PSRAM
 
 unsigned long vuMeterMilisTimeUpdate;           // Zmienna przechowujaca czas dla funkci millis VU Meter refresh
-uint8_t vuMeterRefreshTime = 50;                // Czas w ms odswiezania VUmetera
+uint8_t vuMeterRefreshTime = 33;                // Czas w ms odswiezania VUmetera (~30fps)
 
 // ---- Serwer Web ---- //
 unsigned long currentTime = millis();
@@ -13969,7 +13970,9 @@ void loop()
   if ((displayActive == true) && (displayDimmerActive == true) && (fwupd == false)) {displayDimmer(0);}  
 
   /*---------------------  FUNKCJA BACK / POWROTU ze wszystkich opcji Menu, Ustawien, itd ---------------------*/
-  if ((fwupd == false) && (displayActive) && (millis() - displayStartTime >= displayTimeout))  // Przywracanie poprzedniej zawartości ekranu po 8 sekundach
+  // Krótki timeout dla pilota IR (głośność/stacja) - długi dla SDPlayer auto-play i menu
+  unsigned long _activeDisplayTimeout = (volumeSet || rcInputDigitsMenuEnable) ? shortDisplayTimeout : displayTimeout;
+  if ((fwupd == false) && (displayActive) && (millis() - displayStartTime >= _activeDisplayTimeout))  // Przywracanie poprzedniej zawartości ekranu
   {
     if (volumeBufferValue != volumeValue && f_saveVolumeStationAlways) { saveVolumeOnSD(); }    
     if ((rcInputDigitsMenuEnable == true) && (station_nr != stationFromBuffer)) { changeStation(); }  // Jezeli nastapiła zmiana numeru stacji to wczytujemy nową stacje
@@ -14214,9 +14217,9 @@ void loop()
     }
     
     // KRYTYCZNE: Nie rysuj radio scrollera gdy SDPlayer aktywny
-    // OPTYMALIZACJA: Display 10 FPS (co 100ms) dla MAKSYMALNEJ przepustowości audio
+    // FPS kontrolowany przez vuMeterRefreshTime (domyślnie 33ms = ~30fps)
     static unsigned long lastDisplayUpdate = 0;
-    if (!sdPlayerOLEDActive && (millis() - lastDisplayUpdate >= 100)) {
+    if (!sdPlayerOLEDActive && (millis() - lastDisplayUpdate >= vuMeterRefreshTime)) {
       displayRadioScroller();  // wykonujemy przewijanie tekstu station stringi przygotowujemy bufor ekranu
       u8g2.sendBuffer();  // rysujemy całą zawartosc ekranu.
       lastDisplayUpdate = millis();
