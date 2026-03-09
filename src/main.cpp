@@ -481,7 +481,7 @@ bool f_displayPowerOffClock = false;      // Flaga okreslajaca czy w trybie slee
 bool f_sleepAfterPowerFail = false;       // Flaga czy idziemy do powerOFF po powrocie zasilania
 bool f_saveVolumeStationAlways = false;   // Flaga określająca czy zapisujemy stacje, bank i poziom volume zawsze czy tylko przy power OFF
 //bool f_statusLED = false;
-bool f_powerOffAnimation = false;             // Animacja przy power OFF
+bool f_powerOffAnimation = true;              // Animacja przy power OFF
 bool presetsOn = false;                       // Tryb Presets: klawisze 1-9 = stacje 1-9 z aktualnego banku
 bool speakersEnabled = true;                  // Speakers ON: pin SPEAKERS_PIN aktywny wg stanu; OFF: zawsze LOW
 
@@ -523,7 +523,7 @@ bool noSDcard = false;              // flaga ustawiana przy braku wykrycia karty
 bool noStorage = false;             // flaga ustawiana przy problemie z pamiecia SPIFFS/LittleFS
 
 unsigned long debounceDelay = 300;    // Czas trwania debouncingu w milisekundach
-unsigned long displayTimeout = 8000;  // Czas wyświetlania komunikatu na ekranie w milisekundach (8 sekund)
+unsigned long displayTimeout = 5500;  // Czas wyświetlania komunikatu na ekranie w milisekundach
 unsigned long displayStartTime = 0;   // Czas rozpoczęcia wyświetlania komunikatu
 unsigned long seconds = 0;            // Licznik sekund timera
 unsigned int PSRAM_lenght = MAX_STATIONS * (STATION_NAME_LENGTH) + MAX_STATIONS; // deklaracjia długości pamięci PSRAM
@@ -9779,7 +9779,7 @@ void powerOffAnimation()
     u8g2.drawBox(0, i, width, boxHeight);
 
     u8g2.sendBuffer();
-    delay(20); // czas między krokami animacji
+    delay(13); // 13ms/krok animacji wyłączania
   }
 
   // Po zamknięciu — "zanikanie" linii środkowej
@@ -9788,7 +9788,7 @@ void powerOffAnimation()
     u8g2.clearBuffer();
     u8g2.drawHLine(0, height / 2, width);
     u8g2.sendBuffer();
-    delay(50);
+    delay(33);  // 33ms miganie linii środkowej
   }
 
   // Całkowite wygaszenie
@@ -9957,7 +9957,7 @@ void powerOff()
   if (!volumeMute && f_volumeFadeOn) {volumeFadeOut(volumeSleepFadeOutTime);}
   audio.setVolume(0);
   audio.stopSong();
-  delay(1000);
+  delay(650);  // 650ms po stopSong
   
   // ---- ZAPIS OSTATNIEGO NR.STACJI, NR.BANKU, POZIOMU VOLUME jesli funkcja saveAlwasy wylaczona ----
   if (!f_saveVolumeStationAlways) {saveVolumeOnSD(); saveStationOnSD();}
@@ -10021,8 +10021,10 @@ void powerOff()
     Serial.println("debug Power -> Zapisano analyzer.cfg");
   #endif
   
-  // ---- ANIMACJA POWER OFF, jesli wlaczona ----
-  if (f_powerOffAnimation) {Serial.println("debug Power -> Animacja PowerOff"); powerOffAnimation(); u8g2.clearBuffer();}
+  // ---- ANIMACJA POWER OFF (zawsze) ----
+  Serial.println("debug Power -> Animacja PowerOff");
+  powerOffAnimation();
+  u8g2.clearBuffer();
 
   // ---- ZEGAR W TRYBIE POWER OFF pierwsze wywloane celem synch. ntp----
   if (f_displayPowerOffClock)
@@ -10183,7 +10185,7 @@ void powerOff()
       updateSpeakersPin();
       Serial.println("[POWER] SPEAKERS_PIN ustawiony po Power ON");
       
-      delay(800);
+      delay(550);  // 550ms przed twardym resetem
 
       // Twardy restart
       REG_WRITE(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_SW_SYS_RST);
@@ -11037,7 +11039,7 @@ void handleRemote()
             
             // Pokaż splash screen "SD PLAYER"
             g_sdPlayerOLED->showSplash();
-            delay(1000);  // Pokaż przez 1 sekundę
+            delay(1000);  // 1000ms splash screen
             
             // SYNCHRONIZACJA: Jeśli coś gra, zsynchronizuj WebUI z aktualnym stanem
             if (g_sdPlayerWeb && sdPlayerPlayingMusic) {
@@ -11464,7 +11466,7 @@ void handleRemote()
         //wsVolumeChange(volumeValue);
         wsVolumeChange();
       }
-      else if (ir_code == rcCmdDirect) // Przycisk Direct -> Nagrywanie radia (REC), Menu Bank - update GitHub, Menu Equalizer - reset wartosci, Radio Display - dimmer
+      else if (ir_code == rcCmdDirect) // Przycisk Direct -> Menu Bank: update GitHub/SD, Menu Equalizer: reset wartosci, Radio Display Mode4: audio buffer debug, inne: dimmer OLED
       {
         if ((bankMenuEnable == true) && (equalizerMenuEnable == false))// flage można zmienic tylko bedąc w menu wyboru banku
         { 
@@ -11480,20 +11482,7 @@ void handleRemote()
         }
         if ((bankMenuEnable == false) && (equalizerMenuEnable == false) && (volumeSet == false))
         { 
-          // PRIORTYTET: Nagrywanie radia (Toggle START/STOP)
-          if (g_sdRecorder) {
-            g_sdRecorder->toggleRecording(stationName);
-            
-            if (g_sdRecorder->isRecording()) {
-              Serial.printf("[SDRecorder] Recording STARTED: %s\n", g_sdRecorder->getCurrentFileName().c_str());
-            } else {
-              Serial.printf("[SDRecorder] Recording STOPPED. Size: %s, Time: %s\n", 
-                            g_sdRecorder->getFileSizeString().c_str(),
-                            g_sdRecorder->getRecordTimeString().c_str());
-            }
-            displayRadio();
-          }
-          else if (displayMode == 4) // Jesli jestesmy w display Mode 4 czyli duzy VU wsazowkowy to mozna właczyc buffor audio print.
+          if (displayMode == 4 || displayMode == 5) // Tryby wskazówkowe - włącz wyświetlanie bufora audio
           {
             debugAudioBuffor=!debugAudioBuffor;
           }
@@ -11575,7 +11564,7 @@ void handleRemote()
           clearFlags();
           displayCenterBigText(presetsOn ? "PRESETS ON" : "PRESETS OFF", 36);
           u8g2.sendBuffer();
-          delay(1200);
+          delay(800);  // 800ms
           displayRadio();
           u8g2.sendBuffer();
           Serial.printf("[PRESETS] %s\n", presetsOn ? "ON" : "OFF");
@@ -11685,7 +11674,7 @@ void handleRemote()
           u8g2.setCursor(10, 40);
           u8g2.print(currentIP + "/bt");
           u8g2.sendBuffer();
-          delay(3000);
+          delay(2000);  // 2000ms
           displayRadio();
         } else {
           Serial.println("[IR] GLOS: Moduł BT nie jest włączony");
@@ -11694,7 +11683,7 @@ void handleRemote()
           u8g2.setCursor(20, 32);
           u8g2.print("BT nieaktywny");
           u8g2.sendBuffer();
-          delay(2000);
+          delay(1350);  // 1350ms
           displayRadio();
         }
       }
@@ -11708,7 +11697,7 @@ void handleRemote()
         u8g2.setCursor(40, 32);
         u8g2.print(btModuleEnabled ? "BT: ON" : "BT: OFF");
         u8g2.sendBuffer();
-        delay(2000);
+        delay(1350);  // 1350ms
         displayRadio();
       }
       else if (ir_code == rcCmdCHAT) {
@@ -11724,7 +11713,7 @@ void handleRemote()
           u8g2.setCursor(10, 45);
           u8g2.print("IP: " + currentIP + "/bt");
           u8g2.sendBuffer();
-          delay(3000);
+          delay(2000);  // 2000ms
           displayRadio();
         } else {
           Serial.println("[IR] CHAT: Moduł BT niedostępny");
@@ -11743,7 +11732,7 @@ void handleRemote()
         u8g2.setCursor(10, 45);
         u8g2.print("Config: /bt");
         u8g2.sendBuffer();
-        delay(3000);
+        delay(2000);  // 2000ms
         displayRadio();
       }
       else if (ir_code == rcCmdPOWROT) {
@@ -11757,7 +11746,7 @@ void handleRemote()
           u8g2.setCursor(10, 40);
           u8g2.print(currentIP + "/bt");
           u8g2.sendBuffer();
-          delay(3000);
+          delay(2000);  // 2000ms
           displayRadio();
         } else {
           Serial.println("[IR] POWROT: BT wyłączony");
@@ -11766,7 +11755,7 @@ void handleRemote()
           u8g2.setCursor(30, 32);
           u8g2.print("BT: wyłączony");
           u8g2.sendBuffer();
-          delay(2000);
+          delay(1350);  // 1350ms
           displayRadio();
         }
       }
@@ -11784,7 +11773,7 @@ void handleRemote()
           u8g2.print("Jasnosc: ");
           u8g2.print(displayBrightness);
           u8g2.sendBuffer();
-          delay(1500);
+          delay(1000);  // 1000ms
           displayRadio();
         }
       }
@@ -11802,7 +11791,7 @@ void handleRemote()
           u8g2.print("Jasnosc: ");
           u8g2.print(displayBrightness);
           u8g2.sendBuffer();
-          delay(1500);
+          delay(1000);  // 1000ms
           displayRadio();
         }
       }
@@ -11818,14 +11807,14 @@ void handleRemote()
           
           // Restart: wyłącz i włącz moduł
           btModuleEnabled = false;
-          delay(500);
+          delay(350);  // 350ms restart BT
           btModuleEnabled = true;
           
           u8g2.clearBuffer();
           u8g2.setCursor(30, 32);
           u8g2.print("BT: Gotowy");
           u8g2.sendBuffer();
-          delay(1500);
+          delay(1000);  // 1000ms
           displayRadio();
         } else {
           Serial.println("[IR] REDLEFT: BT nieaktywny");
@@ -11834,7 +11823,7 @@ void handleRemote()
           u8g2.setCursor(20, 32);
           u8g2.print("BT nieaktywny");
           u8g2.sendBuffer();
-          delay(1500);
+          delay(1000);  // 1000ms
           displayRadio();
         }
       }
@@ -11868,7 +11857,7 @@ void handleRemote()
         u8g2.setFont(u8g2_font_helvB08_tf);
         u8g2.print("IP: " + currentIP + "/bt");
         u8g2.sendBuffer();
-        delay(3000);
+        delay(2000);  // 2000ms
         displayRadio();
       }
       else if (ir_code == rcCmdBT && !sdPlayerOLEDActive) {
@@ -12328,7 +12317,7 @@ void setup()
           u8g2.setContrast(i);
           //uint8_t corrected = (i * i) / 255;   // gamma ≈ 2.0
           //u8g2.setContrast(corrected);
-          delay(10); 
+          delay(7);  // 7ms/krok rozjaśniania logo
         }
       u8g2.setContrast(displayBrightness); // Dodatkowe przeładowanie jasnosci          
     }
@@ -12438,13 +12427,6 @@ void setup()
   Serial.println(station_nr);
 
   // Rozpoczęcie konfiguracji Wi-Fi i połączenie z siecią, jeśli konieczne
-  // Animacja gwiazdek PRZED uruchomieniem WiFi
-  Serial.println("Starting WiFi animation...");
-  for (int frame = 0; frame < 100; frame++) {  // 100 klatek = 5 sekund przy 50ms
-    drawStarField(&u8g2, frame);
-    delay(50); // ~20 FPS
-  }
-  
   Serial.println("[WiFi] Konfiguracja WiFiManager...");
   
   // OPTYMALIZACJA WIFI - szybsze łączenie i stabilność strumieniowania
@@ -12457,21 +12439,25 @@ void setup()
   wifiManager.setConnectTimeout(20); // 20 sekund timeout (wystarczy bez błędów auth expire)
   wifiManager.setTimeout(180); // 3 minuty timeout portalu konfiguracyjnego
   wifiManager.setConfigPortalBlocking(false);
-  
+
+  // Animacja gwiazdek PRZED uruchomieniem WiFi - startuje natychmiast po logo
+  Serial.println("[WiFi] Starting star animation...");
+  for (int frame = 0; frame < 100; frame++) {
+    drawStarField(&u8g2, frame);
+    delay(33); // ~30 FPS, 100 klatek = ~3.3 sekund
+  }
+
   Serial.println("[WiFi] Próba połączenia z zapisaną siecią...");
   Serial.printf("[WiFi] SSID: %s\n", wifiManager.getWiFiSSID().c_str());
   wifiManager.autoConnect("EVO-Radio");
-  
-  // PUNKT 2: NON-BLOCKING WIFI - czekaj max 15 sekund na połączenie
+
+  // Czekaj na połączenie WiFi (max 15s)
   Serial.println("[WiFi] Waiting for connection (max 15s)...");
-  unsigned long wifiStartTime = millis();
-  int wifiRetryCount = 0;
-  while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartTime < 15000)) {
-    delay(500);
-    Serial.print(".");
-    wifiRetryCount++;
-    if (wifiRetryCount % 10 == 0) {
-      Serial.printf(" %d%%\n", (int)((millis() - wifiStartTime) / 150));
+  {
+    unsigned long wifiStartTime = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartTime < 15000)) {
+      delay(500);
+      Serial.print(".");
     }
   }
   Serial.println();
@@ -13603,7 +13589,7 @@ void setup()
     
     // Auto-start SD Player jeśli był aktywny przed wyłączeniem
     if (shouldAutoStartSDPlayer && g_sdPlayerOLED) {
-      delay(2000); // Pokaż komunikat przez 2 sekundy
+      delay(1350); // 1350ms przed auto-startem SD Player
       Serial.println("[OFFLINE] Auto-starting SD Player...");
       g_sdPlayerOLED->activate();
       sdPlayerOLEDActive = true;
@@ -14120,7 +14106,18 @@ void loop()
             }
           }
         }
-        if (displayMode == 5) {vuMeterMode5();}
+        if (displayMode == 5)
+        {
+          vuMeterMode5();
+          if (debugAudioBuffor)
+          {
+            for (int i = 0; i < 10; i++)
+            {
+              int y = 1 + (9 - i) * 6;
+              if (audioBufferTime > i) { u8g2.drawBox(126, y, 8, 5);} else {u8g2.drawFrame(126, y, 8, 5);}
+            }
+          }
+        }
         if (displayMode == 7) {vuMeterMode7();}
         // STYLE 8 ZEWNĘTRZNY - Analizator 16-pasmowy z zegarem
         // if (displayMode == 8) {

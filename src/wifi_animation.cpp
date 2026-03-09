@@ -96,9 +96,9 @@ void wifiStarsAnimationUntilConnected(U8G2 *display, unsigned long maxDuration_m
   
   while (millis() - startTime < maxDuration_ms && WiFi.status() != WL_CONNECTED) {
     drawStarField(display, frame++);
-    delay(50); // ~20 FPS
+    delay(33); // było 50ms — ~30 FPS
     
-    // Sprawdzaj status co 100ms
+    // Sprawdzaj status co ~66ms
     if (frame % 2 == 0) {
       if (WiFi.status() == WL_CONNECTED) {
         // Połączenie udane - pokaż komunikat
@@ -108,7 +108,7 @@ void wifiStarsAnimationUntilConnected(U8G2 *display, unsigned long maxDuration_m
         int textWidth = display->getStrWidth(text);
         display->drawStr((256 - textWidth) / 2, 32, text);
         display->sendBuffer();
-        delay(1000);
+        delay(650);  // 650ms splash Connected!
         break;
       }
     }

@@ -14,6 +14,7 @@ extern String dlnaIDX;  // from main.cpp
 QueueHandle_t g_dlnaQueue = nullptr;
 SemaphoreHandle_t g_spiffsMux = nullptr;
 DlnaStatus g_dlnaStatus = {false,false,0,0,0,{0}};
+String g_dlnaListResult = "";  // wynik DJ_LIST
 
 static TaskHandle_t s_workerTask = nullptr;
 static uint32_t s_playlistVer = 1;
@@ -204,6 +205,22 @@ static void dlna_worker_task(void* ) {
       g_dlnaPlaylistDirty = true;
       dlna_status_setDone(j, true, 0, "append ok");
     }
+
+else if (j.type == DJ_LIST) {
+  dlna_status_setBusy(j, "list");
+
+  if (!g_dlnaControlUrl.length()) {
+    g_dlnaListResult = "{\"ok\":false,\"err\":\"DLNA not initialized\"}";
+    dlna_status_setDone(j, false, 503, "DLNA not initialized");
+    continue;
+  }
+
+  DlnaIndex idx;
+  String outJson;
+  bool okList = idx.listContainer(g_dlnaControlUrl, String(j.objectId), outJson, 0);
+  g_dlnaListResult = okList ? outJson : "{\"ok\":false,\"err\":\"Browse failed\"}";
+  dlna_status_setDone(j, okList, okList ? 0 : 500, okList ? "list ok" : "list failed");
+}
 
 else if (j.type == DJ_INIT) {
   dlna_status_setBusy(j, "init");

@@ -470,10 +470,6 @@ void DLNAWebUI::handleList(AsyncWebServerRequest *request) {
     String objectId = request->getParam("id")->value();
     Serial.printf("[DLNAWebUI] /dlna/api/list?id=%s\n", objectId.c_str());
     
-    DlnaIndex idx;
-    String outJson;
-    String err;
-    
     extern String g_dlnaControlUrl;
     
     if (!g_dlnaControlUrl.length()) {
@@ -481,13 +477,23 @@ void DLNAWebUI::handleList(AsyncWebServerRequest *request) {
         return;
     }
     
-    bool ok = idx.listContainer(g_dlnaControlUrl, objectId, outJson, 0);
+    // Zlecamy listContainer do worker task (NIE wywołujemy bezpośrednio - blokuje async_tcp!)
+    DlnaJob job{};
+    job.type = DJ_LIST;
+    strncpy(job.objectId, objectId.c_str(), sizeof(job.objectId)-1);
+    job.reqId = dlna_next_reqId();
+    job.hardLimit = 0;
     
-    if (ok) {
-        request->send(200, "application/json", outJson);
-    } else {
-        request->send(200, "application/json", "{\"ok\":false,\"err\":\"Browse failed\"}");
+    dlna_worker_enqueue(job);
+    
+    // Czekaj na zakończenie (max 10 sekund), delay(50) oddaje CPU innym taskiem
+    unsigned long start = millis();
+    while (millis() - start < 10000) {
+        if (!g_dlnaStatus.busy) break;
+        delay(50);
     }
+    
+    request->send(200, "application/json", g_dlnaListResult);
 }
 
 void DLNAWebUI::handleBuild(AsyncWebServerRequest *request) {

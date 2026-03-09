@@ -4,7 +4,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
-enum DlnaJobType : uint8_t { DJ_INIT=0, DJ_BUILD=1, DJ_APPEND=2, DJ_CANCEL=3 };
+enum DlnaJobType : uint8_t { DJ_INIT=0, DJ_BUILD=1, DJ_APPEND=2, DJ_CANCEL=3, DJ_LIST=4 };
 
 struct DlnaJob {
   DlnaJobType type;
@@ -26,6 +26,7 @@ struct DlnaStatus {
 extern QueueHandle_t g_dlnaQueue;
 extern SemaphoreHandle_t g_spiffsMux;
 extern DlnaStatus g_dlnaStatus;
+extern String g_dlnaListResult;  // wynik handleList (wypełniana przez DJ_LIST)
 
 void dlna_worker_start();
 void dlna_worker_enqueue(const DlnaJob& j);
