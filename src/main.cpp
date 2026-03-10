@@ -8535,6 +8535,42 @@ void stationNameSwap()
   if (stationNameFromStream) stationNameLenghtCut = 40; else stationNameLenghtCut = 24;
 }
 
+#ifdef USE_DLNA
+void saveDLNAConfig()
+{
+  if (STORAGE.exists("/dlna.txt")) STORAGE.remove("/dlna.txt");
+  File f = STORAGE.open("/dlna.txt", FILE_WRITE);
+  if (f) {
+    f.println("DLNA Host =" + dlnaHost + ";");
+    f.println("DLNA IDX =" + dlnaIDX + ";");
+    f.flush();
+    f.close();
+    Serial.println("[DLNA] Config saved: " + dlnaHost + " idx=" + dlnaIDX);
+  } else {
+    Serial.println("[DLNA] ERROR: cannot open dlna.txt for write");
+  }
+}
+
+void readDLNAConfig()
+{
+  if (!STORAGE.exists("/dlna.txt")) { Serial.println("[DLNA] dlna.txt not found, using defaults"); return; }
+  File f = STORAGE.open("/dlna.txt", FILE_READ);
+  if (!f) { Serial.println("[DLNA] ERROR: cannot open dlna.txt"); return; }
+  while (f.available()) {
+    String line = f.readStringUntil(';');
+    line.trim();
+    int eq = line.indexOf('=');
+    if (eq < 0) continue;
+    String key = line.substring(0, eq); key.trim();
+    String val = line.substring(eq + 1); val.trim();
+    if (key == "DLNA Host" && val.length() > 0) dlnaHost = val;
+    else if (key == "DLNA IDX") dlnaIDX = val;
+  }
+  f.close();
+  Serial.println("[DLNA] Config loaded: " + dlnaHost + " idx=" + dlnaIDX);
+}
+#endif
+
 void saveConfig() 
 {
   Serial.println("=== saveConfig() START ===");
@@ -12192,20 +12228,19 @@ void setup()
   // ==============================================================
 
   
-  // ========== MAKSYMALNE OPTYMALIZACJE DLA FLAC STREAMING ==========
-  // 1. AUDIO TASK NA DEDYKOWANYM CORE 1 (separacja od WiFi stack)
-  //    WiFi działa na Core 0, Arduino loop() na Core 1
-  //    Audio task przeniesiony na Core 1 = ZERO konkurencji z WiFi
-  audio.setAudioTaskCore(1);  // Core 1: dedykowany dla audio i dekodowania FLAC
+  // ========== OPTYMALIZACJE DLA FLAC STREAMING ==========
+  // 1. AUDIO TASK NA CORE 1 (separacja od WiFi/AsyncTCP na Core 0)
+  //    async_tcp + WiFi działają na Core 0 - NIE przeszkadzamy im!
+  //    Audio/FLAC decode na Core 1 = brak rywalizacji z TCP
+  audio.setAudioTaskCore(1);  // Core 1: FLAC decode bez konkurencji z WiFi
   
   // 2. Zwiększone timeouty dla stabilności
   audio.setConnectionTimeout(5000, 8000);      // HTTP: 5s, HTTPS: 8s
   
   // UWAGA: WiFi.setSleep(false) już ustawione - krytyczne!
   // UWAGA: WiFi.setTxPower(19.5dBm) - maksymalna moc
-  // UWAGA: PSRAM 640KB buffer - automatycznie używany
-  // UWAGA: TCP window 64KB + send buffer 64KB w platformio.ini
-  // UWAGA: CPU @ 240MHz - wymuszone w setup()
+  // UWAGA: TCP window 64KB w platformio.ini
+  // UWAGA: CPU @ 240MHz + -O2 kompilator = maks. prędkość FLAC decode
   // =================================================================
   
   audio.setVolume(0);
@@ -12364,6 +12399,9 @@ void setup()
   readEqualizerFromSD();     // Odczytujemy ustawienia filtrów equalizera z karty SD 
   readVolumeFromSD();        // Odczytujemy nastawę ostatniego poziomu głośnosci z karty SD /EEPROMu
   readAdcConfig();           // Odczyt konfiguracji klawitury ADC
+  #ifdef USE_DLNA
+  readDLNAConfig();          // Odczyt konfiguracji DLNA (host, IDX)
+  #endif
   readRemoteControlConfig(); // Odczyt konfiguracji pilota IR
   assignRemoteCodes();       // Przypisanie kodów pilota IR
   readTimezone();
@@ -13058,6 +13096,7 @@ void setup()
         if (dlnaIDX.length() == 0) dlnaIDX = "0";
         Serial.println("[Config] DLNA IDX updated: " + dlnaIDX);
       }
+      saveDLNAConfig();
       #endif
       
       readEqualizerFromSD();

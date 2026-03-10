@@ -182,24 +182,41 @@ let currentCategoryId = '';
 let categories = [];
 let items = [];
 
+// Polling helper - czeka aż worker skończy (busy=false)
+async function pollUntilDone(maxMs, interval) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval));
+    try {
+      const resp = await fetch('/dlna/api/status');
+      const data = await resp.json();
+      if (!data.busy) return data;
+    } catch(e) { /* continue on network error */ }
+  }
+  return { busy: false, ok: false, msg: 'timeout' };
+}
+
 // Inicjalizacja DLNA
 async function initDLNA() {
   const btn = document.getElementById('btnInit');
-  const status = document.getElementById('statusInit');
-  
   btn.disabled = true;
   showStatus('statusInit', 'info', 'Inicjalizacja DLNA...');
-  
   try {
     const resp = await fetch('/dlna/api/init', { method: 'POST' });
     const data = await resp.json();
-    
-    if (data.ok) {
+    if (!data.queued) {
+      showStatus('statusInit', 'error', 'Błąd: ' + (data.err || 'nieznany'));
+      btn.disabled = false;
+      return;
+    }
+    showStatus('statusInit', 'info', 'Inicjalizacja w toku (może ~5–10s)...');
+    const result = await pollUntilDone(20000, 500);
+    if (result.ok) {
       dlnaReady = true;
       showStatus('statusInit', 'success', 'DLNA zainicjalizowany!');
       loadCategories();
     } else {
-      showStatus('statusInit', 'error', 'Błąd: ' + (data.err || 'nieznany'));
+      showStatus('statusInit', 'error', 'Błąd: ' + (result.msg || 'nieznany'));
       btn.disabled = false;
     }
   } catch(e) {
@@ -211,25 +228,19 @@ async function initDLNA() {
 // Załaduj kategorie
 async function loadCategories() {
   const select = document.getElementById('selectCategory');
-  const status = document.getElementById('statusCategory');
-  
   showStatus('statusCategory', 'info', 'Ładowanie kategorii...');
-  
   try {
     const resp = await fetch('/dlna/api/categories');
     const data = await resp.json();
-    
     if (data.ok && data.items) {
       categories = data.items;
       select.innerHTML = '<option value="">Wybierz kategorię...</option>';
-      
       data.items.forEach(cat => {
         const opt = document.createElement('option');
         opt.value = cat.id;
         opt.textContent = cat.title || cat.id;
         select.appendChild(opt);
       });
-      
       select.disabled = false;
       showStatus('statusCategory', 'success', `Znaleziono ${data.items.length} kategorii`);
     } else {
@@ -244,9 +255,7 @@ async function loadCategories() {
 async function onCategoryChange() {
   const select = document.getElementById('selectCategory');
   const categoryId = select.value;
-  
   if (!categoryId) return;
-  
   currentCategoryId = categoryId;
   await loadItems(categoryId);
 }
@@ -254,20 +263,26 @@ async function onCategoryChange() {
 // Załaduj items w kategorii
 async function loadItems(categoryId) {
   const select = document.getElementById('selectItem');
-  const status = document.getElementById('statusItem');
-  
   select.disabled = true;
   showStatus('statusItem', 'info', 'Ładowanie zawartości...');
-  
   try {
     const resp = await fetch('/dlna/api/list?id=' + encodeURIComponent(categoryId));
     const data = await resp.json();
-    
-    if (data.ok && data.items) {
-      items = data.items;
+    if (!data.queued) {
+      showStatus('statusItem', 'error', data.err || 'Błąd');
+      return;
+    }
+    const status2 = await pollUntilDone(15000, 500);
+    if (!status2.ok) {
+      showStatus('statusItem', 'warning', 'Brak elementów: ' + (status2.msg || 'błąd'));
+      return;
+    }
+    const rresp = await fetch('/dlna/api/listresult');
+    const result = await rresp.json();
+    if (result.ok && result.items) {
+      items = result.items;
       select.innerHTML = '';
-      
-      data.items.forEach(item => {
+      result.items.forEach(item => {
         const opt = document.createElement('option');
         opt.value = item.id;
         const icon = item.type === 'container' ? '📁' : '🎵';
@@ -275,11 +290,8 @@ async function loadItems(categoryId) {
         opt.dataset.type = item.type;
         select.appendChild(opt);
       });
-      
       select.disabled = false;
-      showStatus('statusItem', 'success', `Znaleziono ${data.items.length} elementów`);
-      
-      // Włącz przyciski akcji
+      showStatus('statusItem', 'success', `Znaleziono ${result.items.length} elementów`);
       document.getElementById('btnUseDLNA').disabled = false;
       document.getElementById('btnUseWeb').disabled = false;
     } else {
@@ -292,14 +304,8 @@ async function loadItems(categoryId) {
 
 // USE DLNA PL - zbuduj playlistę i przełącz
 async function useDLNAPlaylist() {
-  if (!currentCategoryId) {
-    showStatus('statusAction', 'warning', 'Wybierz najpierw kategorię!');
-    return;
-  }
-  
-  const status = document.getElementById('statusAction');
+  if (!currentCategoryId) { showStatus('statusAction', 'warning', 'Wybierz najpierw kategorię!'); return; }
   showStatus('statusAction', 'info', 'Budowanie playlisty DLNA...');
-  
   try {
     const resp = await fetch('/dlna/api/build', {
       method: 'POST',
@@ -307,27 +313,23 @@ async function useDLNAPlaylist() {
       body: 'id=' + encodeURIComponent(currentCategoryId) + '&activate=1'
     });
     const data = await resp.json();
-    
-    if (data.ok) {
-      showStatus('statusAction', 'success', `Playlista zbudowana! Przełączono na DLNA.`);
+    if (!data.queued) { showStatus('statusAction', 'error', 'Błąd: ' + (data.err || 'nieznany')); return; }
+    showStatus('statusAction', 'info', 'Budowanie playlisty (w toku)...');
+    const result = await pollUntilDone(90000, 1000);
+    if (result.ok) {
+      showStatus('statusAction', 'success', 'Playlista zbudowana! Przełączono na DLNA.');
     } else {
-      showStatus('statusAction', 'error', 'Błąd: ' + (data.err || 'nieznany'));
+      showStatus('statusAction', 'error', 'Błąd: ' + (result.msg || 'nieznany'));
     }
   } catch(e) {
-    showStatus('statusAction', 'error', 'Błąd: ' + e.message);
+    showStatus('statusAction', 'error', 'Błąd połączenia: ' + e.message);
   }
 }
 
 // USE WEB PL - tylko zbuduj playlistę (bez przełączenia)
 async function useWebPlaylist() {
-  if (!currentCategoryId) {
-    showStatus('statusAction', 'warning', 'Wybierz najpierw kategorię!');
-    return;
-  }
-  
-  const status = document.getElementById('statusAction');
+  if (!currentCategoryId) { showStatus('statusAction', 'warning', 'Wybierz najpierw kategorię!'); return; }
   showStatus('statusAction', 'info', 'Budowanie playlisty (bez przełączenia)...');
-  
   try {
     const resp = await fetch('/dlna/api/build', {
       method: 'POST',
@@ -335,14 +337,16 @@ async function useWebPlaylist() {
       body: 'id=' + encodeURIComponent(currentCategoryId) + '&activate=0'
     });
     const data = await resp.json();
-    
-    if (data.ok) {
-      showStatus('statusAction', 'success', `Playlista zbudowana (tryb nie zmieniony).`);
+    if (!data.queued) { showStatus('statusAction', 'error', 'Błąd: ' + (data.err || 'nieznany')); return; }
+    showStatus('statusAction', 'info', 'Budowanie playlisty (w toku)...');
+    const result = await pollUntilDone(90000, 1000);
+    if (result.ok) {
+      showStatus('statusAction', 'success', 'Playlista zbudowana (tryb nie zmieniony).');
     } else {
-      showStatus('statusAction', 'error', 'Błąd: ' + (data.err || 'nieznany'));
+      showStatus('statusAction', 'error', 'Błąd: ' + (result.msg || 'nieznany'));
     }
   } catch(e) {
-    showStatus('statusAction', 'error', 'Błąd: ' + e.message);
+    showStatus('statusAction', 'error', 'Błąd połączenia: ' + e.message);
   }
 }
 
@@ -392,6 +396,10 @@ void DLNAWebUI::begin(AsyncWebServer* server) {
     _server->on("/dlna/api/status", HTTP_GET, [this](AsyncWebServerRequest *request){
         this->handleStatus(request);
     });
+
+    _server->on("/dlna/api/listresult", HTTP_GET, [this](AsyncWebServerRequest *request){
+        this->handleListResult(request);
+    });
     
     // Główna strona - NA KOŃCU
     _server->on("/dlna", HTTP_GET, [this](AsyncWebServerRequest *request){
@@ -416,33 +424,18 @@ void DLNAWebUI::handleRoot(AsyncWebServerRequest *request) {
 
 void DLNAWebUI::handleInit(AsyncWebServerRequest *request) {
     Serial.println("[DLNAWebUI] /dlna/api/init wywołane");
-    
-    // Wywołaj asynchroniczne zadanie inicjalizacji DLNA
+    if (g_dlnaStatus.busy) {
+        request->send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}");
+        return;
+    }
     extern String dlnaIDX;
-    
     DlnaJob job{};
     job.type = DJ_INIT;
     strncpy(job.objectId, dlnaIDX.c_str(), sizeof(job.objectId)-1);
     job.reqId = dlna_next_reqId();
     job.hardLimit = 0;
-    
     dlna_worker_enqueue(job);
-    
-    // Czekaj na zakończenie (max 15 sekund)
-    unsigned long start = millis();
-    while (millis() - start < 15000) {
-        if (!g_dlnaStatus.busy) break;
-        delay(50);
-    }
-    
-    String json;
-    if (g_dlnaStatus.ok) {
-        json = "{\"ok\":true,\"msg\":\"DLNA initialized\"}";
-    } else {
-        json = "{\"ok\":false,\"err\":\"" + String(g_dlnaStatus.msg) + "\"}";
-    }
-    
-    request->send(200, "application/json", json);
+    request->send(200, "application/json", "{\"ok\":true,\"queued\":true}");
 }
 
 void DLNAWebUI::handleCategories(AsyncWebServerRequest *request) {
@@ -477,23 +470,17 @@ void DLNAWebUI::handleList(AsyncWebServerRequest *request) {
         return;
     }
     
-    // Zlecamy listContainer do worker task (NIE wywołujemy bezpośrednio - blokuje async_tcp!)
+    if (g_dlnaStatus.busy) {
+        request->send(200, "application/json", "{\"ok\":false,\"err\":\"busy\"}");
+        return;
+    }
     DlnaJob job{};
     job.type = DJ_LIST;
     strncpy(job.objectId, objectId.c_str(), sizeof(job.objectId)-1);
     job.reqId = dlna_next_reqId();
     job.hardLimit = 0;
-    
     dlna_worker_enqueue(job);
-    
-    // Czekaj na zakończenie (max 10 sekund), delay(50) oddaje CPU innym taskiem
-    unsigned long start = millis();
-    while (millis() - start < 10000) {
-        if (!g_dlnaStatus.busy) break;
-        delay(50);
-    }
-    
-    request->send(200, "application/json", g_dlnaListResult);
+    request->send(200, "application/json", "{\"ok\":true,\"queued\":true}");
 }
 
 void DLNAWebUI::handleBuild(AsyncWebServerRequest *request) {
@@ -516,29 +503,10 @@ void DLNAWebUI::handleBuild(AsyncWebServerRequest *request) {
     job.hardLimit = 5000;
     
     dlna_worker_enqueue(job);
-    
-    // Czekaj na zakończenie (max 30 sekund)
-    unsigned long start = millis();
-    while (millis() - start < 30000) {
-        if (!g_dlnaStatus.busy) break;
-        delay(50);
-    }
-    
-    String json;
-    if (g_dlnaStatus.ok) {
-        // Jeśli activate=1, uruchom odtwarzanie z playlisty DLNA
-        // W przyszłości: tutaj może być wywołanie funkcji startDLNAPlayback()
-        // która załaduje playlistę DLNA i rozpocznie odtwarzanie
-        json = "{\"ok\":true,\"msg\":\"Playlist built";
-        if (activate) {
-            json += " and activated";
-        }
-        json += "\"}";
-    } else {
-        json = "{\"ok\":false,\"err\":\"" + String(g_dlnaStatus.msg) + "\"}";
-    }
-    
-    request->send(200, "application/json", json);
+    String respJson = "{\"ok\":true,\"queued\":true,\"activate\":";
+    respJson += activate ? "true" : "false";
+    respJson += "}";
+    request->send(200, "application/json", respJson);
 }
 
 void DLNAWebUI::handleSwitch(AsyncWebServerRequest *request) {
@@ -561,6 +529,11 @@ void DLNAWebUI::handleStatus(AsyncWebServerRequest *request) {
     json += "}";
     
     request->send(200, "application/json", json);
+}
+
+void DLNAWebUI::handleListResult(AsyncWebServerRequest *request) {
+    request->send(200, "application/json",
+        g_dlnaListResult.length() ? g_dlnaListResult : "{\"ok\":false,\"err\":\"No result\"}");
 }
 
 #endif // USE_DLNA

@@ -32,8 +32,25 @@ bool dlnaInit(const String& rootObjectId, String& err) {
   uint32_t lastYield = millis();
 
   if (!ssdp.resolve(dlnaHost, descUrl)) {
-    err = "SSDP discover failed";
+    err = "SSDP discover failed – no MediaServer on network";
     return false;
+  }
+
+  // Auto-update dlnaHost if discovery found a different server (misconfigured or default IP)
+  if (descUrl.startsWith("http://")) {
+    String h = descUrl.substring(7);
+    int colon = h.indexOf(':');
+    int slash = h.indexOf('/');
+    int end = (colon >= 0 && (slash < 0 || colon < slash)) ? colon :
+              (slash >= 0) ? slash : h.length();
+    if (end > 0) {
+      String discoveredHost = h.substring(0, end);
+      if (discoveredHost != dlnaHost) {
+        Serial.printf("[DLNA] Auto-updating dlnaHost: %s -> %s\n",
+                      dlnaHost.c_str(), discoveredHost.c_str());
+        dlnaHost = discoveredHost;
+      }
+    }
   }
 
   if (millis() - lastYield > 50) {

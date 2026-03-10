@@ -11,6 +11,6 @@ private:
   WiFiUDP _udp;
 
   bool sendSearch();
-  bool receiveResponse(const String& expectedHost, String& outDescUrl);
+  bool receiveResponse(String& outUrl);  // host filtering moved to resolve()
   bool parseLocation(const String& response, String& outUrl);
 };

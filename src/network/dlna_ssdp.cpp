@@ -8,32 +8,62 @@ static const uint16_t SSDP_PORT = 1900;
 
 bool DlnaSSDP::resolve(const String& expectedHost, String& outDescUrl) {
   outDescUrl = "";
+  _udp.stop();
 
- 
-_udp.stop();
-
-  // sima UDP socket (nem multicast API!)
+  // plain UDP socket (not multicast API)
   if (!_udp.begin(0)) {
     Serial.println("[DLNA][SSDP] UDP begin failed");
     return false;
   }
 
-  if (!sendSearch()) {
-    _udp.stop();
-    return false;
-  }
+  sendSearch();
 
   unsigned long start = millis();
-  while (millis() - start < 3500) {
-    if (receiveResponse(expectedHost, outDescUrl)) {
-      _udp.stop();
-      return true;
+  unsigned long lastSend = start;
+  String fallbackUrl = "";  // best found URL even if host doesn't match
+
+  while (millis() - start < 5000) {
+    // Re-send M-SEARCH every 1500 ms in case the first packet was lost
+    if (millis() - lastSend >= 1500) {
+      sendSearch();
+      lastSend = millis();
     }
-    delay(10);
+
+    String url;
+    if (receiveResponse(url)) {
+      if (expectedHost.length() == 0) {
+        // No host filter — accept the first server found
+        outDescUrl = url;
+        _udp.stop();
+        return true;
+      }
+      if (url.startsWith(String("http://") + expectedHost)) {
+        // Exact host match
+        outDescUrl = url;
+        _udp.stop();
+        return true;
+      } else {
+        // Server found but IP doesn't match the configured host
+        Serial.printf("[DLNA][SSDP] host mismatch: expected %s, got %s\n",
+                      expectedHost.c_str(), url.c_str());
+        if (fallbackUrl.length() == 0) fallbackUrl = url;
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
+  // Fallback: use any discovered MediaServer even if the IP didn't match
+  // (covers the case where dlnaHost is misconfigured or still at default)
+  if (fallbackUrl.length() > 0) {
+    Serial.printf("[DLNA][SSDP] using fallback server (host mismatch): %s\n",
+                  fallbackUrl.c_str());
+    outDescUrl = fallbackUrl;
+    _udp.stop();
+    return true;
   }
 
   _udp.stop();
-  Serial.println("[DLNA][SSDP] timeout");
+  Serial.println("[DLNA][SSDP] timeout — no MediaServer found on network");
   return false;
 }
 
@@ -54,16 +84,11 @@ bool DlnaSSDP::sendSearch() {
   return true;
 }
 
-bool DlnaSSDP::receiveResponse(const String& expectedHost, String& outDescUrl) {
+bool DlnaSSDP::receiveResponse(String& outUrl) {
   int size = _udp.parsePacket();
   if (!size) return false;
 
-/*  String response;
-  while (_udp.available()) {
-    response += (char)_udp.read();
-  }*/
-
-  // FIX: String összefűzés helyett fix buffer (heap-fragmentáció ellen)
+  // Fixed buffer avoids String concatenation heap fragmentation
   static char buf[1600];
   int n = 0;
   while (_udp.available() && n < (int)sizeof(buf) - 1) {
@@ -76,16 +101,10 @@ bool DlnaSSDP::receiveResponse(const String& expectedHost, String& outDescUrl) {
 
   String url;
   if (!parseLocation(response, url)) return false;
+  if (url.length() == 0) return false;
 
-  if (expectedHost.length() > 0) {
-    if (!url.startsWith(String("http://") + expectedHost)) {
-      Serial.println("[DLNA][SSDP] response ignored (host mismatch)");
-      return false;
-    }
-  }
-
-  outDescUrl = url;
-  Serial.printf("[DLNA][SSDP] FOUND: %s\n", outDescUrl.c_str());
+  outUrl = url;
+  Serial.printf("[DLNA][SSDP] FOUND: %s\n", outUrl.c_str());
   return true;
 }
 

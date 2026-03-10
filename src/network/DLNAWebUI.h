@@ -46,6 +46,7 @@ private:
     void handleBuild(AsyncWebServerRequest *request);
     void handleSwitch(AsyncWebServerRequest *request);
     void handleStatus(AsyncWebServerRequest *request);
+    void handleListResult(AsyncWebServerRequest *request);
     
     // HTML
     static const char DLNA_HTML[] PROGMEM;
