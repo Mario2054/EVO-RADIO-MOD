@@ -1,15 +1,15 @@
 // ################################################################################################################### //
 // Evo Internet Radio                                                                                                  //
 // ################################################################################################################### //
-// Robgold 2026, Made in Poland                                                                                        //
-// Source -> https://github.com/dzikakuna/ESP32_radio_evo3/tree/main/src/ESP32_radio_evo3.19                           //
+// Author:   Robgold 2026, Made in Poland                                                                              //
+// Source -> https://github.com/dzikakuna/ESP32_radio_evo3/tree/main/src/ESP32_radio_evo3.20                           //
 // ################################################################################################################### //
 //                                                                                                                     //
 // Compilator: Arduino, Platformio                                                                                     //
-// ESP32 by Espressif:                          3.3.3 (works on newer but without modified libs for FLAC files)        //
-// ESP32-audioI2S-master by schreibfaul1:       3.4.4g with commits 22.01.2026, FLAC 24bit is working!                 //
-// ESP Async WebServer:                         3.9.1                                                                  //
-// Async TCP:                                   3.4.9                                                                  // 
+// ESP32 by Espressif:                          3.3.7  plus recomiled TCP/IP libs for FLAC                             //
+// ESP32-audioI2S-master by schreibfaul1:       3.4.4x with commits 23.02.2026,                                        //
+// ESP Async WebServer:                         3.10.0                                                                 //
+// Async TCP:                                   3.4.10                                                                 //  
 // ezButton:                                    1.0.6                                                                  //
 // U8g2 by Oliver Olikraus:                     2.35.30                                                                //
 // WiFiManager by tzapu                         2.0.17                                                                 //
@@ -41,6 +41,7 @@
 
 #include "LittleFS.h"
 #include "SD.h"
+#include <SPIFFS.h>            // Biblioteka SPIFFS - używana przez moduł DLNA
 
 // =============== INTEGRACJA MODUŁÓW ===============
 // SDPlayer - odtwarzacz plików z karty SD
@@ -248,7 +249,7 @@ uint16_t rcCmdOk = 0;         // Zatwierdzenie wyboru (stacja, bank, equalizer, 
 uint16_t rcCmdSrc = 0;        // Zmiana trybu wyświetlacza (0-10, pomija 9) - style 5,7 aktywne (nowe VU) z auto-pomijaniem wyłączonych stylów
 uint16_t rcCmdMute = 0;       // Wyciszenie/włączenie dźwięku (toggle)
 uint16_t rcCmdAud = 0;        // Equalizer 3-band/16-band | Podwójne kliknięcie (600ms): aktywacja SDPlayer
-uint16_t rcCmdDirect = 0;     // Radio: toggle nagrywania | Menu Bank: GitHub/SD | Equalizer: reset | Display Mode 4: audio buffer debug | Inne: dimmer OLED
+uint16_t rcCmdDirect = 0;     // Menu Bank: GitHub/SD | Equalizer: reset wartosci | Display Mode 4: audio buffer debug | Radio: dimmer OLED
 uint16_t rcCmdBankMinus = 0;  // Otwiera menu wyboru banku | W menu: bank-1 (z zawijaniem)
 uint16_t rcCmdBankPlus = 0;   // Otwiera menu wyboru banku | W menu: bank+1 (z zawijaniem)
 uint16_t rcCmdRed = 0;        // Power OFF (z animacją jeśli włączona)
@@ -623,6 +624,7 @@ String currentMP3Album = "";
 String header;                      // Zmienna dla serwera www
 String sliderValue = "0";
 String url2play = "";
+String g_currentStationUrl = "";  // Aktualny URL strumienia (do nagrywania)
 
 
 File myFile;  // Uchwyt pliku
@@ -639,6 +641,19 @@ AsyncWebSocket ws("/ws"); //Start obsługi Websocketów
 
 // Inicjalizacja WiFiManagera
 WiFiManager wifiManager;
+
+// =============== MULTI-WIFI - Obsługa wielu sieci WiFi ===============
+#define WIFI_NETWORKS_FILE "/wifi_networks.cfg"
+#define MAX_WIFI_NETWORKS 5
+
+struct WifiNetworkEntry {
+    String ssid;
+    String pass;
+};
+
+WifiNetworkEntry multiWifiNetworks[MAX_WIFI_NETWORKS];
+uint8_t multiWifiCount = 0;
+// =====================================================================
 
 // Konfiguracja nowego SPI z wybranymi pinami dla czytnika kart SD
 SPIClass customSPI = SPIClass(HSPI);  // Używamy HSPI, ale z własnymi pinami
@@ -662,6 +677,10 @@ DLNAWebUI* g_dlnaWebUI = nullptr;
 
 // SDRecorder - globalna instancja (definicja w SDRecorder.cpp)
 // extern SDRecorder* g_sdRecorder; // Jest już zdefiniowane w SDRecorder.h
+
+// Forward declarations for functions used in SDPlayer exit callbacks
+void changeStation();
+void displayRadio();
 
 // Wrapper functions for SDPlayer
 void SDPlayerOLED_init(U8G2* display) {
@@ -694,6 +713,16 @@ void SDPlayerOLED_init(U8G2* display) {
           g_sdPlayerWeb->notifyIndexChange(newIndex);
           Serial.printf("[Main] OLED->WebUI index sync: %d\\n", newIndex);
         }
+      });
+
+      // WebUI "Wstecz" -> przywróć stację radiową
+      g_sdPlayerWeb->setExitCallback([]() {
+        sdPlayerPlayingMusic = false;
+        bank_nr = sdPlayerReturnBank;
+        station_nr = sdPlayerReturnStation;
+        Serial.printf("[SDPlayer] WebUI exit: Przywrócono pozycję: Bank %d, Stacja %d\n", bank_nr, station_nr);
+        changeStation();
+        displayRadio();
       });
       
       Serial.println("[Main] SDPlayer bi-directional sync initialized");
@@ -1546,7 +1575,109 @@ const char adc_html[] PROGMEM = R"rawliteral(
   </html>
 )rawliteral";
 
-const char menu_html[] PROGMEM = R"rawliteral(<!DOCTYPE HTML><html><head><link rel='icon' href='/favicon.ico' type='image/x-icon'><link rel="shortcut icon" href="/favicon.ico" type="image/x-icon"><link rel="apple-touch-icon" sizes="180x180" href="/icon.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon.png"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evo Web Radio</title><style>html{font-family:Arial;display:inline-block;text-align:center}h2{font-size:1.3rem}p{font-size:1.1rem}a{color:black;text-decoration:none}body{max-width:1380px;margin:0 auto;padding-bottom:25px}.button{background-color:#4CAF50;border:1;color:white;padding:10px 20px;border-radius:5px;width:200px}.button:hover{background-color:#4a4a4a}.button:active{background-color:#4a4a4a;box-shadow:0 4px #666;transform:translateY(2px)}</style></head><body><h2>Evo Web Radio - Menu</h2><br><button class="button" onclick="location.href='/info'">Info</button><br><br><button class="button" onclick="location.href='/ota'">OTA Update</button><br><br><button class="button" onclick="location.href='/sdplayer'">SD Player</button><br><br><button class="button" onclick="location.href='/dlna'">DLNA Browser</button><br><br><button class="button" onclick="location.href='/analyzer'">Analyzer Edit</button><br><br><button class="button" onclick="location.href='/adc'">ADC Keyboard Settings</button><br><br><button class="button" onclick="location.href='/list'">SD / SPIFFS Explorer</button><br><br><button class="button" onclick="location.href='/editor'">Memory Bank Editor</button><br><br><button class="button" onclick="location.href='/browser'">Radio Browser API</button><br><br><button class="button" onclick="location.href='/playurl'">Play from URL</button><br><br><button class="button" onclick="location.href='/bt'">Bluetooth Settings</button><br><br><button class="button" onclick="location.href='/remoteconfig'">Remote Control</button><br><br><button class="button" onclick="location.href='/config'">Settings</button><br><br><p style='font-size:.8rem'><a href="#" onclick="window.location.replace('/')">Go Back</a></p></body></html>)rawliteral";
+// ==================== WIFI NETWORKS MANAGEMENT PAGE ====================
+const char wifi_html[] PROGMEM = R"rawliteral(
+<!DOCTYPE HTML><html><head>
+<link rel='icon' href='/favicon.ico' type='image/x-icon'>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Evo Web Radio - WiFi</title>
+<style>
+html{font-family:Arial;text-align:center}
+body{max-width:600px;margin:0 auto;padding:10px}
+h2{font-size:1.3rem}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+th,td{padding:7px;border:1px solid #ccc;font-size:.9rem;text-align:left}
+.btn{padding:6px 14px;border:none;border-radius:4px;cursor:pointer;color:#fff}
+.btn-del{background:#e53935}
+.btn-add{background:#4CAF50;width:100%;padding:10px;font-size:1rem}
+.btn-scan{background:#2196F3;margin-top:4px}
+input[type=text],input[type=password],select{width:100%;padding:7px;box-sizing:border-box;margin:4px 0;font-size:.95rem}
+.note{font-size:.8rem;color:#555;margin-top:14px}
+a{color:#2b5bb3}
+</style>
+</head><body>
+<h2>WiFi Networks</h2>
+<p style="font-size:.85rem;color:#555">Sieci WiFi prubowane sa po kolei przy starcie. Jezeli zadna nie dziala, otwierany jest portal konfiguracyjny "EVO-Radio".</p>
+<table id="netTable">
+<tr><th>#</th><th>SSID</th><th>Haslo</th><th></th></tr>
+</table>
+<hr>
+<h3>Dodaj siec</h3>
+<input type="text" id="ssidIn" placeholder="Nazwa sieci (SSID)">
+<button class="btn btn-scan" onclick="doScan()">&#128246; Skanuj sieci</button>
+<select id="scanSel" style="display:none;margin-top:4px" onchange="document.getElementById('ssidIn').value=this.value"></select>
+<input type="password" id="passIn" placeholder="Haslo WiFi">
+<button class="btn btn-add" onclick="doAdd()">&#43; Dodaj siec</button>
+<p class="note">Zmiany beda aktywne po kolejnym restarcie ESP.<br>Maksymalnie 5 sieci.</p>
+<p><a href="/menu">&#8592; Wróc do Menu</a></p>
+<script>
+function load(){
+  fetch('/wifi-list').then(r=>r.json()).then(data=>{
+    const t=document.getElementById('netTable');
+    while(t.rows.length>1)t.deleteRow(1);
+    if(data.length===0){const r=t.insertRow();const c=r.insertCell();c.colSpan=4;c.textContent='Brak zapisanych sieci';c.style.textAlign='center';}
+    data.forEach((n,i)=>{
+      const r=t.insertRow();
+      r.insertCell().textContent=i+1;
+      r.insertCell().textContent=n.ssid;
+      r.insertCell().textContent=n.pass?'••••••':'(brak)';
+      const c=r.insertCell();
+      const b=document.createElement('button');
+      b.textContent='Usun';b.className='btn btn-del';
+      b.onclick=()=>doRemove(i);
+      c.appendChild(b);
+    });
+  });
+}
+function doScan(){
+  const btn=document.querySelector('.btn-scan');
+  btn.textContent='Skanowanie...';btn.disabled=true;
+  function pollScan(retries){
+    fetch('/wifi-scan').then(r=>{
+      if(r.status===202){
+        // Skan w toku - czekaj 1.2s i sprobuj ponownie (max 8 prob = ~10s)
+        if(retries>0)setTimeout(()=>pollScan(retries-1),1200);
+        else{btn.textContent='\u{1F4F6} Skanuj sieci';btn.disabled=false;alert('Timeout skanowania - sprobuj ponownie');}
+        return null;
+      }
+      return r.json();
+    }).then(data=>{
+      if(!data)return;
+      btn.textContent='\u{1F4F6} Skanuj sieci';btn.disabled=false;
+      const sel=document.getElementById('scanSel');
+      sel.innerHTML='';
+      if(data.length===0){alert('Nie znaleziono sieci');return;}
+      data.forEach(s=>{const o=document.createElement('option');o.value=s;o.textContent=s;sel.appendChild(o);});
+      sel.style.display='block';
+      document.getElementById('ssidIn').value=data[0];
+    }).catch(()=>{btn.textContent='\u{1F4F6} Skanuj sieci';btn.disabled=false;});
+  }
+  pollScan(8);
+}
+function doAdd(){
+  const s=document.getElementById('ssidIn').value.trim();
+  const p=document.getElementById('passIn').value;
+  if(!s){alert('Wpisz nazwe sieci (SSID)');return;}
+  const fd=new FormData();fd.append('ssid',s);fd.append('pass',p);
+  fetch('/wifi-add',{method:'POST',body:fd}).then(r=>r.text()).then(t=>{
+    alert(t);load();
+    document.getElementById('ssidIn').value='';
+    document.getElementById('passIn').value='';
+    document.getElementById('scanSel').style.display='none';
+  });
+}
+function doRemove(i){
+  if(!confirm('Usunac siec #'+(i+1)+'?'))return;
+  const fd=new FormData();fd.append('idx',i);
+  fetch('/wifi-remove',{method:'POST',body:fd}).then(r=>r.text()).then(t=>{alert(t);load();});
+}
+load();
+</script>
+</body></html>
+)rawliteral";
+// ========================================================================
+
+const char menu_html[] PROGMEM = R"rawliteral(<!DOCTYPE HTML><html><head><link rel='icon' href='/favicon.ico' type='image/x-icon'><link rel="shortcut icon" href="/favicon.ico" type="image/x-icon"><link rel="apple-touch-icon" sizes="180x180" href="/icon.png"><link rel="icon" type="image/png" sizes="192x192" href="/icon.png"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Evo Web Radio</title><style>html{font-family:Arial;display:inline-block;text-align:center}h2{font-size:1.3rem}p{font-size:1.1rem}a{color:black;text-decoration:none}body{max-width:1380px;margin:0 auto;padding-bottom:25px}.button{background-color:#4CAF50;border:1;color:white;padding:10px 20px;border-radius:5px;width:200px}.button:hover{background-color:#4a4a4a}.button:active{background-color:#4a4a4a;box-shadow:0 4px #666;transform:translateY(2px)}</style></head><body><h2>Evo Web Radio - Menu</h2><br><button class="button" onclick="location.href='/info'">Info</button><br><br><button class="button" onclick="location.href='/ota'">OTA Update</button><br><br><button class="button" onclick="location.href='/sdplayer'">SD Player</button><br><br><button class="button" onclick="location.href='/dlna'">DLNA Browser</button><br><br><button class="button" onclick="location.href='/analyzer'">Analyzer Edit</button><br><br><button class="button" onclick="location.href='/adc'">ADC Keyboard Settings</button><br><br><button class="button" onclick="location.href='/list'">SD / SPIFFS Explorer</button><br><br><button class="button" onclick="location.href='/editor'">Memory Bank Editor</button><br><br><button class="button" onclick="location.href='/browser'">Radio Browser API</button><br><br><button class="button" onclick="location.href='/playurl'">Play from URL</button><br><br><button class="button" onclick="location.href='/bt'">Bluetooth Settings</button><br><br><button class="button" onclick="location.href='/remoteconfig'">Remote Control</button><br><br><button class="button" onclick="location.href='/wifi'">WiFi Networks</button><br><br><button class="button" onclick="location.href='/config'">Settings</button><br><br><p style='font-size:.8rem'><a href="#" onclick="window.location.replace('/')">Go Back</a></p></body></html>)rawliteral";
 
 const char info_html[] PROGMEM = R"rawliteral(
  <!DOCTYPE HTML>
@@ -3816,10 +3947,27 @@ void displayRadio()
     stationStringFormatting(); //Formatujemy stationString wyswietlany przez funkcję Scrollera
     
     // Wskaźnik nagrywania (REC) w górnym prawym rogu
+    // Ikonka SD karty (10x12 px) + napis REC + migająca kropka
     if (g_sdRecorder && g_sdRecorder->isRecording()) {
+      // Ikonka SD karty: prostokąt 10x12 z ukośnym rogiem (lewy górny)
+      // Pozycja: x=196, y=1
+      const int sx = 196, sy = 1;
+      u8g2.drawBox(sx + 2, sy,      8, 12);   // prawy prostokąt
+      u8g2.drawBox(sx,     sy + 2,  2, 10);   // lewy bok
+      u8g2.drawLine(sx, sy + 2, sx + 2, sy);  // skos na lewym górnym rogu
+      // Złącze SD (3 linie na dole)
+      u8g2.setDrawColor(0);
+      u8g2.drawLine(sx + 2, sy + 9, sx + 3, sy + 9);
+      u8g2.drawLine(sx + 5, sy + 9, sx + 6, sy + 9);
+      u8g2.drawLine(sx + 8, sy + 9, sx + 9, sy + 9);
+      u8g2.setDrawColor(1);
+      // Napis REC
       u8g2.setFont(spleen6x12PL);
-      u8g2.drawStr(220, 12, "\x07REC");  // \x07 to kropka/bullet
-      u8g2.drawCircle(223, 9, 3);         // Czerwona kropka (animacja)
+      u8g2.drawStr(208, 12, "REC");
+      // Migająca kropka (co 500ms)
+      if ((millis() / 500) % 2 == 0) {
+        u8g2.drawDisc(248, 6, 3);
+      }
     }
     
     u8g2.drawLine(0, 52, 255, 52); // Dolna linia rozdzielajaca
@@ -5221,6 +5369,9 @@ void changeStation()
     // Płynne wyciszenie przed zmiana stacji jesli włączone
     if (f_volumeFadeOn && !volumeMute) {volumeFadeOut(volumeFadeOutTime);}
     
+    // Zapamietaj URL dla nagrywania
+    g_currentStationUrl = stationUrl;
+
     // Połącz z daną stacją
     audio.connecttohost(stationUrl.c_str());
     
@@ -6476,8 +6627,10 @@ void vuMeterMode4() // Mode4 eksperymetn z duzymi wskaznikami VU
 void vuMeterMode5() // Mode5 – VU analogowe z prostokątną skalą
 {
   // ===== Odczyt VU =====
-  uint8_t rawL = audio.getVUlevel() >> 8;
-  uint8_t rawR = audio.getVUlevel() & 0xFF;
+  // FIX: Clamping do 0-127 (spójne z Mode0/Mode3/Mode4 - bugfix z ESP32-audioI2S 3.4.4x commit #8)
+  uint16_t raw5 = audio.getVUlevel();
+  uint8_t rawL = min((raw5 >> 8) & 0x7F, 127);  // Clamp left 0-127
+  uint8_t rawR = min(raw5 & 0x7F, 127);         // Clamp right 0-127
 
   int vuL = map(rawL, 0, 191, 0, 100); // skalowanie +1/3
   int vuR = map(rawR, 0, 191, 0, 100);
@@ -6654,9 +6807,12 @@ void vuMeterMode7() // Mode7 - Duże paski VU na cały ekran
 {
   u8g2.clearBuffer(); // Wyczyść cały bufor ekranu przed rysowaniem
   
+  // FIX: Clamping do 0-127 (spójne z Mode0/Mode3/Mode4 - bugfix z ESP32-audioI2S 3.4.4x commit #8)
   uint16_t raw = audio.getVUlevel();
-  vuMeterL = min(255, (int)(((raw >> 8) & 0xFF) * 4 / 3)); // skalowanie +1/3
-  vuMeterR = min(255, (int)((raw & 0xFF) * 4 / 3));
+  uint8_t rawL7 = min((raw >> 8) & 0x7F, 127);  // Clamp 0-127
+  uint8_t rawR7 = min(raw & 0x7F, 127);         // Clamp 0-127
+  vuMeterL = (uint8_t)map(rawL7, 0, 191, 0, 243); // skalowanie jak Mode0: max 127->161
+  vuMeterR = (uint8_t)map(rawR7, 0, 191, 0, 243);
 
   if (vuMeterR < 1) vuMeterR = 0;
   if (vuMeterL < 1) vuMeterL = 0;
@@ -7357,17 +7513,17 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
 
 void bufforAudioInfo()
 {
-  int bitRateBps = audio.getBitRate() / 1000;
-  int bytesPerSecond = 0;
+  uint32_t bitRateBps = audio.getBitRate();          // bity na sekundę
+  float bytesPerSecond = 0.0f;
 
-  if (bitRateBps > 0) { bytesPerSecond = bitRateBps / 8;}   // kB/s
+  if (bitRateBps > 0) { bytesPerSecond = bitRateBps / 8.0f; }  // bajtów/sek
 
-  int inputBufferBytes = audio.inBufferFilled() / 1000;
+  uint32_t inputBufferBytes = audio.inBufferFilled();          // bajtów w buforze
 
   // zabezpieczenie przed dzieleniem przez zero i innymi błędami
-  if (bytesPerSecond > 0 && inputBufferBytes > 8) 
+  if (bytesPerSecond > 0.0f && inputBufferBytes > 0) 
   {
-    audioBufferTime = inputBufferBytes / bytesPerSecond;
+    audioBufferTime = (int)(inputBufferBytes / bytesPerSecond);  // float division → poprawne sekundy
   } 
   else 
   {
@@ -8569,6 +8725,53 @@ void readDLNAConfig()
   f.close();
   Serial.println("[DLNA] Config loaded: " + dlnaHost + " idx=" + dlnaIDX);
 }
+
+// Wczytaj playlistę DLNA z SPIFFS do psramData i uruchom odtwarzanie
+// Format pliku: title\turl\t0 (jeden wpis na linię)
+// Wywołuj po pomyślnym zbudowaniu playlisty przez dlna_worker (DJ_BUILD)
+void activateDLNAMode() {
+  const char* dlnaPlaylistPath = "/playlist_dlna.txt";
+  if (!SPIFFS.exists(dlnaPlaylistPath)) {
+    Serial.println("[DLNA] activateDLNAMode: brak pliku /playlist_dlna.txt");
+    return;
+  }
+  File f = SPIFFS.open(dlnaPlaylistPath, "r");
+  if (!f) {
+    Serial.println("[DLNA] activateDLNAMode: blad otwarcia playlisty");
+    return;
+  }
+
+  stationsCount = 0;
+  mp3 = flac = aac = vorbis = opus = false;
+  stationString.remove(0);
+
+  while (f.available() && stationsCount < MAX_STATIONS) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+    // Format: title\turl\t0
+    int tab1 = line.indexOf('\t');
+    if (tab1 < 0) continue;
+    int tab2 = line.indexOf('\t', tab1 + 1);
+    String url = (tab2 > tab1) ? line.substring(tab1 + 1, tab2)
+                               : line.substring(tab1 + 1);
+    url.trim();
+    if (url.indexOf("http") < 0) continue;
+    String title = line.substring(0, min(tab1, 42));
+    title.trim();
+    // sanitizeAndSaveStation szuka 'http' w stringu - uzyj formatu "title  url"
+    String entry = title + "  " + url;
+    sanitizeAndSaveStation(entry.c_str());
+  }
+  f.close();
+
+  currentSelection = 0;
+  firstVisibleLine = 0;
+  station_nr = 1;
+  wsRefreshPage();
+  changeStation();
+  Serial.printf("[DLNA] activateDLNAMode: %d stacji zaladowanych z playlisty\n", stationsCount);
+}
 #endif
 
 void saveConfig() 
@@ -9061,6 +9264,9 @@ void webUrlStationPlay()
     u8g2.drawStr(34, 55, String(url2play).c_str());
     u8g2.sendBuffer();
     
+    // Zapamietaj URL dla nagrywania
+    g_currentStationUrl = url2play;
+
     // Połącz z daną stacją
     audio.connecttohost(url2play.c_str());
     urlPlaying = true;
@@ -9324,7 +9530,13 @@ void voiceTime()
   snprintf(chbuf, sizeof (chbuf), "Jest godzina %i:%02i:00", h, time_s.substring(3,5).toInt());
   Serial.print("debug voice time PL -> ");
   Serial.println(chbuf);
-  
+
+  // Reset timeoutu nagrywania — TTS przez HTTPS moze zajac 10-30s
+  if (g_sdRecorder && g_sdRecorder->isRecording()) {
+    g_sdRecorder->resetTimeout();
+    Serial.println("[SDRec] Reset timeoutu przed TTS (voiceTime PL)");
+  }
+
   audio.connecttospeech(chbuf, "pl");
 }
 
@@ -9351,6 +9563,13 @@ void voiceTimeEn()
   sprintf(chbuf, "It is now %i%s and %i minutes", h, am_pm, time_s.substring(3,5).toInt());
   Serial.print("debug voice time EN -> ");
   Serial.println(chbuf);
+
+  // Reset timeoutu nagrywania — TTS przez HTTPS moze zajac 10-30s
+  if (g_sdRecorder && g_sdRecorder->isRecording()) {
+    g_sdRecorder->resetTimeout();
+    Serial.println("[SDRec] Reset timeoutu przed TTS (voiceTime EN)");
+  }
+
   audio.connecttospeech(chbuf, "en");
 }
 
@@ -9505,6 +9724,23 @@ void assignRemoteCodes()
     rcCmdKey7 = 0xB907;       // Przycisk "7"
     rcCmdKey8 = 0xB908;       // Przycisk "8"
     rcCmdKey9 = 0xB909;       // Przycisk "9"
+    // Wypełnij configRemoteArray[26..41] wartościami domyślnymi (potrzebne przy zapisie do pliku)
+    configRemoteArray[26] = 0xB993;   // cmdYellow - Toggle Analyzer
+    configRemoteArray[27] = 0xB994;   // cmdBlue   - REC/BLUE
+    configRemoteArray[28] = 0xB995;   // cmdBT
+    configRemoteArray[29] = 0xB996;   // cmdPLAY
+    configRemoteArray[30] = 0xB997;   // cmdSTOP
+    configRemoteArray[31] = 0xB998;   // cmdREV
+    configRemoteArray[32] = 0xB999;   // cmdRER
+    configRemoteArray[33] = 0x0000;   // cmdTV
+    configRemoteArray[34] = 0xB99A;   // cmdRADIO
+    configRemoteArray[35] = 0xB99B;   // cmdFILES
+    configRemoteArray[36] = 0x0000;   // cmdWWW
+    configRemoteArray[37] = 0x0000;   // cmdGAZE
+    configRemoteArray[38] = 0x0000;   // cmdEPG
+    configRemoteArray[39] = 0xB99C;   // cmdMENU
+    configRemoteArray[40] = 0xB99D;   // cmdEXIT
+    configRemoteArray[41] = 0xB994;   // cmdREC (alias BLUE)
     // === DODATKOWE PRZYCISKI - WARTOŚCI DOMYŚLNE ===
     // Kenwood RC-406 nie ma tych przycisków - użyj uniwersalnych kodów NEC lub ustaw na 0 jeśli brak
     rcCmdBT = 0xB995;         // Strona BT (możesz zmienić na kod swojego pilota)
@@ -9580,6 +9816,22 @@ void saveRemoteControlConfig()
       myFile.printf("%s = 0x%04X;\n", "cmdKey7", configRemoteArray[23]);
       myFile.printf("%s = 0x%04X;\n", "cmdKey8", configRemoteArray[24]);
       myFile.printf("%s = 0x%04X;\n", "cmdKey9", configRemoteArray[25]);
+      myFile.printf("%s = 0x%04X;\n", "cmdYellow", configRemoteArray[26]);    // [26] Toggle Analyzer
+      myFile.printf("%s = 0x%04X;\n", "cmdBlue", configRemoteArray[27]);      // [27] REC/BLUE
+      myFile.printf("%s = 0x%04X;\n", "cmdBT", configRemoteArray[28]);        // [28] BT
+      myFile.printf("%s = 0x%04X;\n", "cmdPLAY", configRemoteArray[29]);      // [29] SDPlayer PLAY
+      myFile.printf("%s = 0x%04X;\n", "cmdSTOP", configRemoteArray[30]);      // [30] SDPlayer STOP
+      myFile.printf("%s = 0x%04X;\n", "cmdREV", configRemoteArray[31]);       // [31] SDPlayer REV
+      myFile.printf("%s = 0x%04X;\n", "cmdRER", configRemoteArray[32]);       // [32] SDPlayer RER
+      myFile.printf("%s = 0x%04X;\n", "cmdTV", configRemoteArray[33]);        // [33] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdRADIO", configRemoteArray[34]);     // [34] SDPlayer RADIO
+      myFile.printf("%s = 0x%04X;\n", "cmdFILES", configRemoteArray[35]);     // [35] SDPlayer FILES
+      myFile.printf("%s = 0x%04X;\n", "cmdWWW", configRemoteArray[36]);       // [36] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdGAZE", configRemoteArray[37]);      // [37] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdEPG", configRemoteArray[38]);       // [38] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdMENU", configRemoteArray[39]);      // [39] SDPlayer MENU
+      myFile.printf("%s = 0x%04X;\n", "cmdEXIT", configRemoteArray[40]);      // [40] SDPlayer EXIT
+      myFile.printf("%s = 0x%04X;\n", "cmdREC", configRemoteArray[41]);       // [41] Nagrywanie REC
       myFile.close();
       Serial.println("RC - Config, aktualizacja remote.txt udana");
     }
@@ -9623,6 +9875,22 @@ void saveRemoteControlConfig()
       myFile.printf("%s = 0x%04X;\n", "cmdKey7", configRemoteArray[23]);
       myFile.printf("%s = 0x%04X;\n", "cmdKey8", configRemoteArray[24]);
       myFile.printf("%s = 0x%04X;\n", "cmdKey9", configRemoteArray[25]);
+      myFile.printf("%s = 0x%04X;\n", "cmdYellow", configRemoteArray[26]);    // [26] Toggle Analyzer
+      myFile.printf("%s = 0x%04X;\n", "cmdBlue", configRemoteArray[27]);      // [27] REC/BLUE
+      myFile.printf("%s = 0x%04X;\n", "cmdBT", configRemoteArray[28]);        // [28] BT
+      myFile.printf("%s = 0x%04X;\n", "cmdPLAY", configRemoteArray[29]);      // [29] SDPlayer PLAY
+      myFile.printf("%s = 0x%04X;\n", "cmdSTOP", configRemoteArray[30]);      // [30] SDPlayer STOP
+      myFile.printf("%s = 0x%04X;\n", "cmdREV", configRemoteArray[31]);       // [31] SDPlayer REV
+      myFile.printf("%s = 0x%04X;\n", "cmdRER", configRemoteArray[32]);       // [32] SDPlayer RER
+      myFile.printf("%s = 0x%04X;\n", "cmdTV", configRemoteArray[33]);        // [33] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdRADIO", configRemoteArray[34]);     // [34] SDPlayer RADIO
+      myFile.printf("%s = 0x%04X;\n", "cmdFILES", configRemoteArray[35]);     // [35] SDPlayer FILES
+      myFile.printf("%s = 0x%04X;\n", "cmdWWW", configRemoteArray[36]);       // [36] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdGAZE", configRemoteArray[37]);      // [37] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdEPG", configRemoteArray[38]);       // [38] zarezerwowany
+      myFile.printf("%s = 0x%04X;\n", "cmdMENU", configRemoteArray[39]);      // [39] SDPlayer MENU
+      myFile.printf("%s = 0x%04X;\n", "cmdEXIT", configRemoteArray[40]);      // [40] SDPlayer EXIT
+      myFile.printf("%s = 0x%04X;\n", "cmdREC", configRemoteArray[41]);       // [41] Nagrywanie REC
       myFile.close();
       Serial.println("RC - Config, utworzono remote.txt");
     }
@@ -11106,9 +11374,10 @@ void handleRemote()
       }
       
       // 4. Toggle Analyzer (np. przycisk YELLOW na pilocie)
-      if (ir_code == rcCmdYellow) {
+      // UWAGA: Sprawdzamy że Yellow != Blue/REC żeby uniknąć konfliktu (REC ma priorytet)
+      if (ir_code == rcCmdYellow && ir_code != rcCmdBlue && ir_code != rcCmdREC) {
         analyzerEnabled = !analyzerEnabled;
-        eq_analyzer_set_enabled(analyzerEnabled);
+        eqAnalyzerSetFromWeb(analyzerEnabled);  // synchronizuje g_enabled + eqAnalyzerEnabled
         Serial.printf("DEBUG: Analyzer %s\n", analyzerEnabled ? "ENABLED" : "DISABLED");
         displayRadio();
         ir_code = 0;
@@ -11925,7 +12194,7 @@ void handleRemote()
         // Przycisk REC/BLUE - nagrywanie strumienia radiowego
         if (g_sdRecorder) {
           // Toggle nagrywania - START/STOP
-          g_sdRecorder->toggleRecording(stationName);
+          g_sdRecorder->toggleRecording(stationName, g_currentStationUrl);
           
           // Wyświetl status
           if (g_sdRecorder->isRecording()) {
@@ -12064,6 +12333,215 @@ void tas5805vol(uint8_t volume)
 // ==================== KONIEC FUNKCJI TAS5805 ====================
 
 
+
+// ==================== MULTI-WIFI FUNCTIONS ====================
+
+// Wczytaj liste sieci WiFi z pliku /wifi_networks.cfg
+// Format pliku: jedna siec na linie: SSID|HASLO
+void loadWifiNetworks() {
+  multiWifiCount = 0;
+  if (!STORAGE.exists(WIFI_NETWORKS_FILE)) {
+    Serial.println("[MultiWiFi] Brak pliku wifi_networks.cfg");
+    return;
+  }
+  File f = STORAGE.open(WIFI_NETWORKS_FILE, FILE_READ);
+  if (!f) {
+    Serial.println("[MultiWiFi] Nie mozna otworzyc pliku wifi_networks.cfg");
+    return;
+  }
+  while (f.available() && multiWifiCount < MAX_WIFI_NETWORKS) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0 || line.startsWith("#")) continue;
+    int sep = line.indexOf('|');
+    if (sep < 1) continue;
+    multiWifiNetworks[multiWifiCount].ssid = line.substring(0, sep);
+    multiWifiNetworks[multiWifiCount].pass = line.substring(sep + 1);
+    multiWifiNetworks[multiWifiCount].ssid.trim();
+    multiWifiNetworks[multiWifiCount].pass.trim();
+    if (multiWifiNetworks[multiWifiCount].ssid.length() > 0) {
+      Serial.printf("[MultiWiFi] Zaladowano siec %d: %s\n", multiWifiCount + 1, multiWifiNetworks[multiWifiCount].ssid.c_str());
+      multiWifiCount++;
+    }
+  }
+  f.close();
+  Serial.printf("[MultiWiFi] Zaladowano %d sieci\n", multiWifiCount);
+}
+
+// Zapisz liste sieci WiFi do pliku /wifi_networks.cfg
+void saveWifiNetworks() {
+  if (STORAGE.exists(WIFI_NETWORKS_FILE)) {
+    STORAGE.remove(WIFI_NETWORKS_FILE);
+  }
+  File f = STORAGE.open(WIFI_NETWORKS_FILE, FILE_WRITE);
+  if (!f) {
+    Serial.println("[MultiWiFi] Blad zapisu wifi_networks.cfg");
+    return;
+  }
+  f.println("# Evo Radio - Lista sieci WiFi (SSID|HASLO)");
+  for (uint8_t i = 0; i < multiWifiCount; i++) {
+    f.print(multiWifiNetworks[i].ssid);
+    f.print("|");
+    f.println(multiWifiNetworks[i].pass);
+  }
+  f.close();
+  Serial.printf("[MultiWiFi] Zapisano %d sieci do pliku\n", multiWifiCount);
+}
+
+// Proba polaczenia ze wszystkimi zapisanymi sieciami WiFi
+// Zwraca true jesli udalo sie polaczyc z jakas siecia
+bool connectMultiWifi() {
+  if (multiWifiCount == 0) {
+    Serial.println("[MultiWiFi] Brak sieci na liscie");
+    return false;
+  }
+
+  // Wyczysc stan WiFi przed skanowaniem
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false);
+  delay(300);
+
+  // Diagnostyczne skanowanie: pokaz co jest widoczne
+  Serial.println("[MultiWiFi] Skanowanie widocznych sieci...");
+  int scanCount = WiFi.scanNetworks(false, true);
+  if (scanCount <= 0) {
+    Serial.printf("[MultiWiFi] Brak widocznych sieci (scan=%d)\n", scanCount);
+  } else {
+    for (int s = 0; s < scanCount && s < 10; s++) {
+      Serial.printf("[MultiWiFi] [%d] SSID: '%s'  RSSI: %d dBm\n", s, WiFi.SSID(s).c_str(), WiFi.RSSI(s));
+    }
+  }
+
+  // WAZNE: scanDelete() MUSI byc po sortowaniu - najpierw budujemy tablice sortowania ze skanu
+  // actualSSID = oryginalny SSID z routera (moze miec trailing space) - uzyty do WiFi.begin()
+  struct SortEntry { uint8_t netIdx; int rssi; String actualSSID; };
+  SortEntry sortedNets[MAX_WIFI_NETWORKS];
+  uint8_t sortedCount = 0;
+
+  // Szukaj naszych sieci w wynikach skanu (porownanie po trimie, ale zachowaj oryginalny SSID)
+  // POPRAWKA: ten sam SSID moze byc widoczny z wielu AP (mesh/repeater) - zachowaj tylko
+  // NAJLEPSZY sygnal (RSSI) dla kazdego zapisanego netIdx, aby uniknac przepelnienia sortedNets[].
+  for (int s = 0; s < scanCount; s++) {
+    String rawSSID = WiFi.SSID(s);       // oryginalny SSID z routera (np. "SSID_BE ")
+    int    rawRSSI = WiFi.RSSI(s);       // zapisz PRZED scanDelete()
+    String trimmedSSID = rawSSID;
+    trimmedSSID.trim();                   // trimujemy tylko do porownania
+    for (uint8_t i = 0; i < multiWifiCount; i++) {
+      if (trimmedSSID == multiWifiNetworks[i].ssid) {
+        // Sprawdz czy ten netIdx juz jest w sortedNets (drugi AP z tym samym SSID)
+        bool alreadyIn = false;
+        for (uint8_t j = 0; j < sortedCount; j++) {
+          if (sortedNets[j].netIdx == i) {
+            // Zachowaj lepszy sygnal
+            if (rawRSSI > sortedNets[j].rssi) {
+              sortedNets[j].rssi = rawRSSI;
+              sortedNets[j].actualSSID = rawSSID;
+              Serial.printf("[MultiWiFi] Lepszy AP dla '%s': RSSI %d dBm\n",
+                            multiWifiNetworks[i].ssid.c_str(), rawRSSI);
+            }
+            alreadyIn = true;
+            break;
+          }
+        }
+        if (!alreadyIn) {
+          sortedNets[sortedCount++] = {i, rawRSSI, rawSSID};
+          Serial.printf("[MultiWiFi] Dopasowano: '%s' -> RSSI: %d dBm\n",
+                        multiWifiNetworks[i].ssid.c_str(), rawRSSI);
+        }
+        break;
+      }
+    }
+  }
+  WiFi.scanDelete();  // Dopiero TERAZ zwalniamy pamiec skanu (po zbudowaniu sortedNets)
+  // Sieci niewidoczne w skanie dodaj na koniec (RSSI=-100, uzyj SSID z pliku)
+  for (uint8_t i = 0; i < multiWifiCount; i++) {
+    bool found = false;
+    for (uint8_t j = 0; j < sortedCount; j++) {
+      if (sortedNets[j].netIdx == i) { found = true; break; }
+    }
+    if (!found) sortedNets[sortedCount++] = {i, -100, multiWifiNetworks[i].ssid};
+  }
+  // Sortowanie babelkowe wg RSSI malejaco (najsilniejszy = najmniej ujemny = pierwszy)
+  for (uint8_t a = 0; a < sortedCount - 1; a++) {
+    for (uint8_t b = a + 1; b < sortedCount; b++) {
+      if (sortedNets[b].rssi > sortedNets[a].rssi) {
+        SortEntry tmp = sortedNets[a]; sortedNets[a] = sortedNets[b]; sortedNets[b] = tmp;
+      }
+    }
+  }
+
+  // KRYTYCZNE: wylacz persistent przed probami z SD - NIE nadpisuj NVS/WiFiManager!
+  // Jesli haslo z SD jest zle, WiFiManager po nas wciaz moze miec poprawne haslo w NVS.
+  WiFi.persistent(false);
+
+  // Proba polaczenia w kolejnosci od najsilniejszego sygnalu
+  for (uint8_t si = 0; si < sortedCount; si++) {
+    uint8_t i = sortedNets[si].netIdx;
+    String actualSSID = sortedNets[si].actualSSID;
+    const char* pass = multiWifiNetworks[i].pass.c_str();
+
+    // Max 2 proby na kazda siec: przy drugiej probuje odswiezony skan (dla sieci z trailing space)
+    for (uint8_t attempt = 0; attempt < 2; attempt++) {
+      if (attempt == 1) {
+        // Druga proba: szybki re-skan aby pobrac aktualny rawSSID (rozwiazuje brak trailing space)
+        Serial.println("[MultiWiFi] Re-skan przed 2. proba...");
+        int reScan = WiFi.scanNetworks(false, true);
+        for (int s = 0; s < reScan; s++) {
+          String raw = WiFi.SSID(s);
+          String trimmed = raw; trimmed.trim();
+          if (trimmed == multiWifiNetworks[i].ssid) {
+            actualSSID = raw;
+            Serial.printf("[MultiWiFi] Re-skan: rawSSID='%s'\n", raw.c_str());
+            break;
+          }
+        }
+        WiFi.scanDelete();
+      }
+
+      Serial.printf("[MultiWiFi] Proba %d/%d (prot.%d): '%s' (%d dBm, haslo: %d znakow)\n",
+                    si + 1, sortedCount, attempt + 1,
+                    actualSSID.c_str(), sortedNets[si].rssi, strlen(pass));
+
+      WiFi.disconnect(false);
+      delay(100);
+      WiFi.begin(actualSSID.c_str(), pass);
+
+      unsigned long tStart = millis();
+      bool done = false;
+      bool wrongPass = false;
+      while (!done && (millis() - tStart < 15000)) {
+        wl_status_t st = (wl_status_t)WiFi.status();
+        if (st == WL_CONNECTED) {
+          WiFi.persistent(true);  // Przywroc persistent - wymagane dla autoReconnect
+          Serial.printf("[MultiWiFi] Polaczono! SSID: %s  IP: %s  (%lums)\n",
+                        WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(),
+                        millis() - tStart);
+          return true;
+        }
+        if (st == WL_CONNECT_FAILED) {
+          Serial.printf("[MultiWiFi] '%s' -> BLAD AUTH (zle haslo?)\n", actualSSID.c_str());
+          done = true; wrongPass = true; // zle haslo - nie retry, przejdz do nastepnej sieci
+        } else if (st == WL_NO_SSID_AVAIL) {
+          Serial.printf("[MultiWiFi] '%s' -> SSID nie znaleziony\n", actualSSID.c_str());
+          done = true; // moze byc chwilowo - sprobujemy jeszcze raz (jesli attempt==0)
+        } else {
+          delay(500);
+          Serial.print(".");
+        }
+      }
+      Serial.println();
+      WiFi.disconnect(false);
+      delay(200);
+      if (wrongPass) break; // nie ma sensu robic re-skanu gdy zle haslo
+    }
+  }
+
+  // Przywroc persistent przed WiFiManagerem - niech on sam zarzadza NVS
+  WiFi.persistent(true);
+  Serial.println("[MultiWiFi] Nie polaczono z zadna siecia");
+  return false;
+}
+// ==============================================================
 
 //####################################################################################### SETUP ####################################################################################### //
 
@@ -12236,11 +12714,8 @@ void setup()
   
   // 2. Zwiększone timeouty dla stabilności
   audio.setConnectionTimeout(5000, 8000);      // HTTP: 5s, HTTPS: 8s
-  
-  // UWAGA: WiFi.setSleep(false) już ustawione - krytyczne!
-  // UWAGA: WiFi.setTxPower(19.5dBm) - maksymalna moc
-  // UWAGA: TCP window 64KB w platformio.ini
-  // UWAGA: CPU @ 240MHz + -O2 kompilator = maks. prędkość FLAC decode
+
+  // 3. Bufor wejściowy w PSRAM - domyślnie ~640KB (UINT16_MAX * 10), wystarczający dla FLAC (ramki do 16KB)
   // =================================================================
   
   audio.setVolume(0);
@@ -12436,7 +12911,16 @@ void setup()
   // -------------------- DLNA INIT --------------------
   #ifdef USE_DLNA
   Serial.println("[DLNA] Initializing worker and service...");
-  
+
+  // KRYTYCZNE: Montuj partycję SPIFFS - używaną przez moduł DLNA
+  // (Playlista DLNA, plik tymczasowy tmp_playlist.txt, indeks kategorii)
+  if (!SPIFFS.begin(true)) {
+    Serial.println("[DLNA] OSTRZEZENIE: Nie mozna zamontowac SPIFFS! DLNA moze nie dzialac.");
+  } else {
+    Serial.printf("[DLNA] SPIFFS zamontowany. Wolne: %u B / %u B\n",
+                  (unsigned)SPIFFS.usedBytes(), (unsigned)SPIFFS.totalBytes());
+  }
+
   // Inicjalizacja mutexów i kolejek
   if (!g_dlnaHttpMux) {
     g_dlnaHttpMux = xSemaphoreCreateMutex();
@@ -12448,9 +12932,8 @@ void setup()
     Serial.println("[DLNA] SPIFFS mutex created");
   }
   
-  // Uruchom DLNA worker task
+  // Uruchom DLNA worker task (dlna_service_begin wywoluje dlna_worker_start wewnatrz)
   dlna_service_begin();
-  dlna_worker_start();
   Serial.println("[DLNA] Worker and service initialized");
   #endif
   
@@ -12472,8 +12955,10 @@ void setup()
   WiFi.mode(WIFI_STA);              // Ustaw tryb Station
   WiFi.setSleep(false);              // KRYTYCZNE: Wyłącz WiFi sleep mode (zapobiega AUTH_EXPIRE)
   WiFi.setTxPower(WIFI_POWER_19_5dBm); // Maksymalna moc WiFi dla stabilności strumieniowania FLAC/AAC
-  WiFi.setAutoReconnect(true);       // Automatyczne ponowne łączenie
-  WiFi.persistent(true);             // Zapisuj konfigurację WiFi w flash
+  WiFi.setAutoReconnect(false);      // WYŁĄCZONE: zapobiega auto-łączeniu z NVS podczas animacji
+  WiFi.persistent(false);            // false: próby z SD karty NIE nadpisują NVS
+  WiFi.disconnect(false);            // Upewnij się że WiFi nie łączy się z NVS przed naszą próbą
+  delay(100);
   
   wifiManager.setConnectTimeout(20); // 20 sekund timeout (wystarczy bez błędów auth expire)
   wifiManager.setTimeout(180); // 3 minuty timeout portalu konfiguracyjnego
@@ -12486,23 +12971,41 @@ void setup()
     delay(33); // ~30 FPS, 100 klatek = ~3.3 sekund
   }
 
-  Serial.println("[WiFi] Próba połączenia z zapisaną siecią...");
-  Serial.printf("[WiFi] SSID: %s\n", wifiManager.getWiFiSSID().c_str());
-  wifiManager.autoConnect("EVO-Radio");
+  // ---- MULTI-WIFI: wczytaj liste sieci i prubuj sie polaczyc ----
+  loadWifiNetworks();
+  bool multiWifiConnected = connectMultiWifi();
 
-  // Czekaj na połączenie WiFi (max 15s)
-  Serial.println("[WiFi] Waiting for connection (max 15s)...");
-  {
-    unsigned long wifiStartTime = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartTime < 15000)) {
-      delay(500);
-      Serial.print(".");
+  if (!multiWifiConnected) {
+    // Zadna z zapisanych sieci nie dziala - uzyj WiFiManagera (portal lub zapisana siec)
+    Serial.println("[WiFi] Multi-WiFi: brak polaczenia, uruchamiam WiFiManager...");
+    // Reset stosu WiFi przed WiFiManagerem - usuwa stan WL_CONNECT_FAILED z WiFiMulti
+    WiFi.mode(WIFI_OFF);
+    delay(300);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(false);
+    delay(200);
+    Serial.printf("[WiFi] SSID (WiFiManager): %s\n", wifiManager.getWiFiSSID().c_str());
+    wifiManager.setConnectTimeout(20);  // 20s na połączenie
+    wifiManager.autoConnect("EVO-Radio");
+
+    // Czekaj na połączenie WiFi (max 15s)
+    Serial.println("[WiFi] Waiting for connection (max 15s)...");
+    {
+      unsigned long wifiStartTime = millis();
+      while (WiFi.status() != WL_CONNECTED && (millis() - wifiStartTime < 15000)) {
+        delay(500);
+        Serial.print(".");
+      }
     }
+    Serial.println();
   }
-  Serial.println();
+  // ---------------------------------------------------------------
   
   if (WiFi.status() == WL_CONNECTED) 
   {
+    // Teraz włącz auto-reconnect (tylko po pomyślnym połączeniu)
+    WiFi.setAutoReconnect(true);
     Serial.println("[WiFi] ✓ Połączono z siecią WiFi");
     Serial.printf("[WiFi] IP: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("[WiFi] RSSI: %d dBm\n", WiFi.RSSI());
@@ -13073,7 +13576,7 @@ void setup()
       }
       
       // Zastosuj ustawienia analizatora i equalizera 3-point
-      eq_analyzer_set_enabled(analyzerEnabled);
+      eqAnalyzerSetFromWeb(analyzerEnabled);  // synchronizuje g_enabled + eqAnalyzerEnabled
       
       // Jeśli preset się zmienił, zastosuj go i zapisz
       if (presetChanged) {
@@ -13561,6 +14064,120 @@ void setup()
 
     ws.onEvent(onWsEvent);
     server.addHandler(&ws);
+
+    // ==================== MULTI-WIFI WEB ENDPOINTS ====================
+
+    // GET /wifi - strona zarzadzania sieciami WiFi
+    server.on("/wifi", HTTP_GET, [](AsyncWebServerRequest *request) {
+      request->send(200, "text/html", FPSTR(wifi_html));
+    });
+
+    // GET /wifi-list - JSON lista zapisanych sieci
+    server.on("/wifi-list", HTTP_GET, [](AsyncWebServerRequest *request) {
+      String json = "[";
+      for (uint8_t i = 0; i < multiWifiCount; i++) {
+        if (i > 0) json += ",";
+        json += "{\"ssid\":\"";
+        // Escape special JSON characters
+        for (char c : multiWifiNetworks[i].ssid) {
+          if (c == '"' || c == '\\') json += '\\';
+          json += c;
+        }
+        json += "\",\"pass\":";
+        json += multiWifiNetworks[i].pass.length() > 0 ? "true" : "false";
+        json += "}";
+      }
+      json += "]";
+      request->send(200, "application/json", json);
+    });
+
+    // GET /wifi-scan - JSON lista dostępnych sieci z otoczenia
+    // POPRAWKA: WiFi.scanNetworks(false,...) blokuje async TCP task na kilka sekund.
+    // Uzywamy async scan: wyslij 202 jezeli w trakcie skanowania, wyniki po zakonczeniu.
+    server.on("/wifi-scan", HTTP_GET, [](AsyncWebServerRequest *request) {
+      int16_t scanResult = WiFi.scanComplete();
+      if (scanResult == WIFI_SCAN_RUNNING) {
+        // Skan juz trwa - popros klienta o ponowna probe za 1s
+        request->send(202, "application/json", "[]");
+        return;
+      }
+      if (scanResult == WIFI_SCAN_FAILED || scanResult == 0) {
+        // Uruchom nowy skan asynchronicznie (nie blokuje) i od razu zwroc pustą listę
+        WiFi.scanNetworks(true /*async*/, false /*hidden*/);
+        request->send(202, "application/json", "[]");
+        return;
+      }
+      // Skan gotowy - zbierz wyniki
+      String json = "[";
+      for (int i = 0; i < scanResult; i++) {
+        if (i > 0) json += ",";
+        json += "\"";
+        for (char c : WiFi.SSID(i)) {
+          if (c == '"' || c == '\\') json += '\\';
+          json += c;
+        }
+        json += "\"";
+      }
+      json += "]";
+      WiFi.scanDelete();
+      request->send(200, "application/json", json);
+    });
+
+    // POST /wifi-add - dodaj siec (parametry: ssid, pass)
+    server.on("/wifi-add", HTTP_POST, [](AsyncWebServerRequest *request) {
+      if (!request->hasParam("ssid", true)) {
+        request->send(400, "text/plain", "Brak parametru ssid");
+        return;
+      }
+      String ssid = request->getParam("ssid", true)->value();
+      String pass = request->hasParam("pass", true) ? request->getParam("pass", true)->value() : "";
+      ssid.trim();
+      if (ssid.length() == 0) {
+        request->send(400, "text/plain", "SSID nie moze byc pusty");
+        return;
+      }
+      // Sprawdz czy juz istnieje
+      for (uint8_t i = 0; i < multiWifiCount; i++) {
+        if (multiWifiNetworks[i].ssid == ssid) {
+          // Zaktualizuj haslo
+          multiWifiNetworks[i].pass = pass;
+          saveWifiNetworks();
+          request->send(200, "text/plain", "Siec '" + ssid + "' zaktualizowana");
+          return;
+        }
+      }
+      if (multiWifiCount >= MAX_WIFI_NETWORKS) {
+        request->send(400, "text/plain", "Osiagnieto limit " + String(MAX_WIFI_NETWORKS) + " sieci");
+        return;
+      }
+      multiWifiNetworks[multiWifiCount].ssid = ssid;
+      multiWifiNetworks[multiWifiCount].pass = pass;
+      multiWifiCount++;
+      saveWifiNetworks();
+      request->send(200, "text/plain", "Siec '" + ssid + "' dodana (" + String(multiWifiCount) + "/" + String(MAX_WIFI_NETWORKS) + ")");
+    });
+
+    // POST /wifi-remove - usun siec po indeksie (parametr: idx)
+    server.on("/wifi-remove", HTTP_POST, [](AsyncWebServerRequest *request) {
+      if (!request->hasParam("idx", true)) {
+        request->send(400, "text/plain", "Brak parametru idx");
+        return;
+      }
+      int idx = request->getParam("idx", true)->value().toInt();
+      if (idx < 0 || idx >= (int)multiWifiCount) {
+        request->send(400, "text/plain", "Nieprawidlowy indeks");
+        return;
+      }
+      String removed = multiWifiNetworks[idx].ssid;
+      for (uint8_t i = idx; i < multiWifiCount - 1; i++) {
+        multiWifiNetworks[i] = multiWifiNetworks[i + 1];
+      }
+      multiWifiCount--;
+      saveWifiNetworks();
+      request->send(200, "text/plain", "Siec '" + removed + "' usunieta");
+    });
+
+    // ==================================================================
     
     // =============== INICJALIZACJA MODUŁÓW - FULL INTEGRATION ===============
     Serial.println("DEBUG: Initializing integrated modules...");
@@ -13569,7 +14186,7 @@ void setup()
     Serial.println("DEBUG: Initializing FFT Analyzer...");
     if (eq_analyzer_init()) {
         Serial.println("DEBUG: FFT Analyzer initialized successfully");
-        eq_analyzer_set_enabled(analyzerEnabled);  // Domyślnie wyłączony
+        eqAnalyzerSetFromWeb(analyzerEnabled);  // synchronizuje g_enabled + eqAnalyzerEnabled
     } else {
         Serial.println("WARNING: FFT Analyzer initialization failed");
     }
@@ -13641,23 +14258,11 @@ void setup()
 }
 
 // #######################################################################################  LOOP  ####################################################################################### //
-// ======================= AUDIO PROCESSING CALLBACK =======================
-// Funkcja przekazująca próbki audio do analizatora FFT (wywoływana z Audio.cpp)
-// UWAGA: Wersja 3.4.4 używa int16_t (kompatybilność backward)
-void audio_process_i2s(int16_t* outBuff, int32_t validSamples, bool* continueI2S)
-{
-  // Push audio samples to SDRecorder (jeśli nagrywa)
-  if (g_sdRecorder && g_sdRecorder->isRecording()) {
-    g_sdRecorder->pushAudioData(outBuff, validSamples);
-  }
-  
-  // Push audio samples to EQ analyzer (validSamples is number of stereo frames)
-  eq_analyzer_push_samples_i16((const int16_t*)outBuff, validSamples);
-  
-  // Używamy 3-punktowego equalizera z audio.setTone()
-  // Continue normal audio processing
-  *continueI2S = true;
-}
+// UWAGA: audio_process_i2s jest teraz w src/audio_hooks.cpp (NIE tutaj).
+// Powód: Audio.h deklaruje ten symbol jako __attribute__((weak)), przez co GCC
+// emituje KAŻDĄ definicję w tej samej jednostce kompilacji jako weak symbol (W).
+// Linker wybierał wtedy pusty stub z Audio.cpp.o zamiast naszej implementacji.
+// Przeniesienie do pliku bez #include "Audio.h" gwarantuje strong symbol (T).
 
 // #######################################################################################  LOOP  ####################################################################################### //
 void loop() 

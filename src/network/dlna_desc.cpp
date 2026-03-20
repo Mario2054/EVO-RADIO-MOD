@@ -23,9 +23,20 @@ bool DlnaDescription::resolveControlURL(const String& descUrl, String& outContro
     return false;
   }
 
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("User-Agent", "UPnP/1.1 ESP32Radio/1.0");
+  http.addHeader("Accept", "text/xml, application/xml, */*");
+  http.addHeader("Connection", "close");
+
   int code = http.GET();
   if (code != HTTP_CODE_OK) {
-    Serial.printf("[DLNA] HTTP error: %d\n", code);
+    Serial.printf("[DLNA] HTTP error: %d  URL: %s\n", code, descUrl.c_str());
+    if (code == 403) {
+      Serial.println("[DLNA] 403 Forbidden - sprawdz: IP whitelist na serwerze, lub zly URL");
+      outControlUrl = "403";  // sygnalizuj blad 4xx do serwisu (nie rob retry)
+    } else if (code == 404) {
+      outControlUrl = "404";
+    }
     http.end();
     return false;
   }

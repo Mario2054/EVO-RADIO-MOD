@@ -317,7 +317,14 @@ async function useDLNAPlaylist() {
     showStatus('statusAction', 'info', 'Budowanie playlisty (w toku)...');
     const result = await pollUntilDone(90000, 1000);
     if (result.ok) {
-      showStatus('statusAction', 'success', 'Playlista zbudowana! Przełączono na DLNA.');
+      try {
+        const swResp = await fetch('/dlna/api/switch', { method: 'POST' });
+        const swData = await swResp.json();
+        showStatus('statusAction', swData.ok ? 'success' : 'warning',
+          swData.ok ? 'Playlista zbudowana i przełączono na DLNA!' : ('Playlista ok, błąd aktywacji: ' + (swData.msg||'')));
+      } catch(e) {
+        showStatus('statusAction', 'warning', 'Playlista zbudowana, błąd przełączenia: ' + e.message);
+      }
     } else {
       showStatus('statusAction', 'error', 'Błąd: ' + (result.msg || 'nieznany'));
     }
@@ -511,13 +518,9 @@ void DLNAWebUI::handleBuild(AsyncWebServerRequest *request) {
 
 void DLNAWebUI::handleSwitch(AsyncWebServerRequest *request) {
     Serial.println("[DLNAWebUI] /dlna/api/switch wywołane");
-    
-    // W przyszłości: tutaj będzie logika przełączania na tryb DLNA
-    // Obecnie tylko zwracamy OK
-    // extern void activateDLNAMode();
-    // activateDLNAMode();
-    
-    request->send(200, "application/json", "{\"ok\":true,\"msg\":\"DLNA mode activation pending\"}");
+    extern void activateDLNAMode();
+    activateDLNAMode();
+    request->send(200, "application/json", "{\"ok\":true,\"msg\":\"DLNA mode activated\"}");
 }
 
 void DLNAWebUI::handleStatus(AsyncWebServerRequest *request) {
@@ -532,8 +535,10 @@ void DLNAWebUI::handleStatus(AsyncWebServerRequest *request) {
 }
 
 void DLNAWebUI::handleListResult(AsyncWebServerRequest *request) {
-    request->send(200, "application/json",
-        g_dlnaListResult.length() ? g_dlnaListResult : "{\"ok\":false,\"err\":\"No result\"}");
+    xSemaphoreTake(g_spiffsMux, portMAX_DELAY);
+    String result = g_dlnaListResult.length() ? g_dlnaListResult : "{\"ok\":false,\"err\":\"No result\"}";
+    xSemaphoreGive(g_spiffsMux);
+    request->send(200, "application/json", result);
 }
 
 #endif // USE_DLNA

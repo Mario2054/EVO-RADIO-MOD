@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -16,6 +18,8 @@ void  eq_analyzer_deinit(void);            // stop + cleanup
 void  eq_analyzer_reset(void);             // wyzeruj poziomy/peaki/ref
 void  eq_analyzer_set_enabled(bool en);    // global ON/OFF (z WWW / pilota)
 bool  eq_analyzer_get_enabled(void);
+bool  eq_analyzer_get_runtime_active(void);
+QueueHandle_t eq_analyzer_get_queue(void);
 
 // Gdy wyświetlany jest styl 5/6, można podbić aktywność; gdy nie – usypiamy
 void  eq_analyzer_set_runtime_active(bool active);

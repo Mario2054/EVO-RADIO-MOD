@@ -2,128 +2,128 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <FS.h>
-#include <atomic>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/semphr.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
+#include <freertos/stream_buffer.h>
 
 /**
- * SDRecorder - Nagrywanie strumienia radiowego do pliku na SD
- * 
- * Funkcje:
- * ✅ Nagrywanie strumienia audio w formacie WAV (PCM 48kHz stereo 16-bit)
- * ✅ Automatyczna nazwa pliku: REC_YYYYMMDD_HHMMSS_StationName.wav
- * ✅ Ring buffer 512KB z atomic operations (thread-safe)
- * ✅ Osobny FreeRTOS task do zapisu na SD (core 0)
- * ✅ Chunked writing (10KB chunks + flush co 64KB)
- * ✅ Wyświetlanie statusu nagrywania na OLED
- * ✅ Obsługa przez pilot IR (START/STOP/PAUSE)
- * ✅ Licznik czasu nagrywania
- * ✅ Gain 100x z saturacją (zapobieganie clipping)
+ * SDRecorder v2 - Nagrywanie strumienia radiowego bezposrednio jako MP3
+ *
+ * Nowe podejscie (przepisane na wzor ESP32_internet_radio_v3):
+ * Nagrywanie strumienia audio w formacie MP3 (bezstratna kopia strumienia z serwera)
+ * Male pliki: 128 kbps ~ 1 MB/min (vs ~10 MB/min dla WAV w starej wersji)
+ * Obsluga HTTP i HTTPS (z samopodpisanymi certyfikatami - setInsecure)
+ * Obsluga Transfer-Encoding: chunked (automatyczne wykrywanie i parsowanie)
+ * Obsluga redirectow HTTP (rekurencyjnie, max 5 poziomow)
+ * Automatyczna nazwa pliku: REC_YYYYMMDD_HHMMSS_StationName.mp3
+ * Prosty model: loop() odczytuje TCP -> SD, brak FreeRTOS task, brak ring buffer
+ * Timeout 20s - automatyczne zatrzymanie przy braku danych
+ * Zgodny interfejs z poprzednia wersja (te same public metody)
  */
 
 class SDRecorder {
 public:
-    // Status nagrywania
+    // Stan nagrywania (zgodny wstecz z poprzednia wersja)
     enum RecordState {
-        IDLE = 0,           // Nie nagrywa
-        RECORDING = 1,      // Aktywnie nagrywa
-        PAUSED = 2          // Pauza
+        IDLE      = 0,
+        RECORDING = 1,
+        PAUSED    = 2   // nieuzywany w v2, zachowany dla zgodnosci
     };
 
     SDRecorder();
     ~SDRecorder();
-    
-    // Inicjalizacja
+
+    // Inicjalizacja - wywolaj raz w setup()
     void begin();
-    
-    // Główna pętla - wywołuj w loop()
+
+    // Glowna petla - wywoluj w loop() przez SDRecorder_loop()
+    // Odczytuje dane z TCP i zapisuje na SD
     void loop();
-    
+
     // Kontrola nagrywania
-    bool startRecording(const String& stationName = "");  // Rozpocznij nagrywanie
-    void stopRecording();                                  // Zatrzymaj i zapisz
-    void pauseRecording();                                 // Wstrzymaj (bez zamykania pliku)
-    void resumeRecording();                                // Wznów nagrywanie
-    void toggleRecording(const String& stationName = ""); // Toggle START/STOP
-    
-    // Push audio data (wywołaj z audio_process_i2s)
-    void pushAudioData(const int16_t* buffer, int32_t frames);
-    
-    // Ustawienie wzmocnienia (gain) - domyślnie 4.0 (4x głośniej)
-    void setGain(float gain) { _gain = gain; }
-    float getGain() const { return _gain; }
-    
+    // stationUrl jest wymagany - to adres strumienia (np. "http://stream.example.com/live")
+    bool startRecording(const String& stationName = "", const String& stationUrl = "");
+    void stopRecording();
+    void toggleRecording(const String& stationName = "", const String& stationUrl = "");
+
     // Gettery statusu
-    RecordState getState() const { return _state; }
-    bool isRecording() const { return _state == RECORDING; }
-    bool isPaused() const { return _state == PAUSED; }
-    unsigned long getRecordTime() const;      // Czas nagrywania w sekundach
-    String getRecordTimeString() const;       // Format: "HH:MM:SS"
-    String getCurrentFileName() const { return _currentFileName; }
-    size_t getFileSize() const { return _fileSize; }
-    String getFileSizeString() const;         // Format: "12.5 MB"
-    
-    // Wyświetlanie na OLED (callback - ustaw z main.cpp)
+    RecordState   getState()            const { return _state; }
+    bool          isRecording()         const { return _state == RECORDING; }
+    bool          isPaused()            const { return _state == PAUSED; }
+    unsigned long getRecordTime()       const;
+    String        getRecordTimeString() const;
+    String        getCurrentFileName()  const { return _currentFileName; }
+    size_t        getFileSize()         const { return _fileSize; }
+    String        getFileSizeString()   const;
+
+    // Callback statusu na OLED (taki sam interfejs jak v1)
     typedef void (*DisplayCallback)(const String& status, const String& time, const String& size);
     void setDisplayCallback(DisplayCallback callback) { _displayCallback = callback; }
-    
+
+    // Reset timeoutu — wywolaj przed dluga operacja (np. TTS), zeby recTask nie przerwał nagrywania
+    void resetTimeout() { _lastRecordRead = millis(); }
+
     // Konfiguracja
-    void setMaxFileSize(size_t maxMB);        // Max rozmiar pliku w MB (0 = unlimited)
-    void setRecordPath(const String& path);   // Katalog zapisu (domyślnie "/RECORDINGS")
-    
+    void setMaxFileSize(size_t maxMB);       // 0 = unlimited
+    void setRecordPath(const String& path);  // domyslnie "/RECORDINGS"
+
 private:
     // Stan
-    RecordState _state;
-    File _recordFile;
-    String _currentFileName;
-    String _recordPath;
-    
+    RecordState   _state;
+    File          _recordFile;
+    String        _currentFileName;
+    String        _recordPath;
+    String        _stationUrl;
+
     // Statystyki
     unsigned long _recordStartTime;
-    unsigned long _recordPauseTime;
-    unsigned long _totalPauseTime;
-    std::atomic<size_t> _fileSize;
-    size_t _maxFileSize;
-    
-    // Ring Buffer (2MB w PSRAM) - thread-safe z atomic operations
-    static const size_t RING_BUFFER_SIZE = 2 * 1024 * 1024;  // 2MB (~10-12 sekund @ 48kHz stereo)
-    uint8_t* _ringBuffer;
-    std::atomic<size_t> _writePos;    // atomic write pointer
-    std::atomic<size_t> _readPos;     // atomic read pointer
-    float _gain;                      // Wzmocnienie sygnału (4.0 = 4x głośniej)
-    
-    // FreeRTOS Task dla asynchronicznego zapisu
-    TaskHandle_t _writerTaskHandle;
-    SemaphoreHandle_t _fileMutex;
-    volatile bool _stopWriterTask;
-    
-    // Chunked writing (8KB chunks + longer retry delays dla wolnych SD kart)
-    static const size_t WRITE_CHUNK_SIZE = 8 * 1024;    // 8KB chunks (mniej operacji write = mniej overhead)
-    static const size_t FLUSH_INTERVAL = 128 * 1024;    // Flush co 128KB (szybszy zapis niż flush po każdym write)
-    size_t _bytesWrittenSinceFlush;
-    
+    size_t        _fileSize;
+    size_t        _maxFileSize;
+
+    // Polaczenie TCP (HTTP / HTTPS)
+    WiFiClient       _recClient;
+    WiFiClientSecure _recSecure;
+    bool             _useSSL;
+
+    // Parsowanie HTTP
+    bool          _headersRead;    // czy naglowki juz przeczytane w tej sesji
+    bool          _isChunked;      // Transfer-Encoding: chunked
+    String        _fileExt;        // rozszerzenie pliku wykryte z Content-Type (.mp3/.flac/.aac/.ogg)
+    unsigned long _lastRecordRead; // timestamp ostatniego bajtu - do timeoutu
+
+    // Bufor zapisu SD (loop() / stopRecording() — Core 1)
+    // ODDZIELNY od bufora TCP w recTask (Core 0) — eliminuje race condition!
+    // 512 = rozmiar 1 sektora SD = 1 deskryptor DMA (12 bajtow)
+    // 4096 wymaga 8 deskryptorow DMA — przy sfragmentowanym heap alokacja nie wychodzi
+    static const size_t BUFFER_SIZE = 512;
+    uint8_t*      _buffer;
+    size_t        _lastFlush;   // zamiennik static lastFlush z loop()
+
+    // FreeRTOS task (Core 0) — czyta TCP i wrzuca do _streamBuf
+    // loop() (Core 1) drainuje _streamBuf i zapisuje na SD
+    // Dzieki temu wszystkie operacje SD sa z jednego kontekstu — brak konfliktow SPI
+    volatile bool        _stopRequested;
+    TaskHandle_t         _recTaskHandle;
+    StreamBufferHandle_t _streamBuf;   // thread-safe SPSC, 128 KB
+    static void          recTask(void* param);
+
     // Callback
     DisplayCallback _displayCallback;
-    
-    // Ring Buffer Operations
-    size_t getRingBufferAvailableSpace() const;
-    size_t getRingBufferDataSize() const;
-    bool writeToRingBuffer(const uint8_t* data, size_t size);
-    size_t readFromRingBuffer(uint8_t* data, size_t maxSize);
-    
-    // FreeRTOS Task
-    static void wavWriterTask(void* parameter);
-    void writerTaskLoop();
-    
-    // Metody prywatne
+
+    // Polaczenie ze stacja (z obsluga redirectow)
+    bool connectStream(const String& url, int depth = 0);
+
+    // Pomocnicze parsowanie HTTP
+    String readHttpLine(WiFiClient& c);
+    int    readChunkSize(WiFiClient& c);
+    int    readHttpHeaders(WiFiClient& c, String& redirectUrl);
+
+    // Generowanie nazwy pliku i folderu
     String generateFileName(const String& stationName);
-    bool openRecordFile(const String& filename);
-    void closeRecordFile();
-    void ensureRecordDirectory();
+    void   ensureRecordDirectory();
+
+    // Formatowanie rozmiaru pliku
     String formatFileSize(size_t bytes) const;
-    void writeWavHeader(uint32_t sampleRate, uint16_t numChannels, uint16_t bitsPerSample, uint32_t dataSize);
-    void updateWavHeader();
 };
 
 // Globalna instancja (deklaracja - definicja w .cpp)

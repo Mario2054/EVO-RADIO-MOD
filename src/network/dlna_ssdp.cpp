@@ -64,7 +64,49 @@ bool DlnaSSDP::resolve(const String& expectedHost, String& outDescUrl) {
 
   _udp.stop();
   Serial.println("[DLNA][SSDP] timeout — no MediaServer found on network");
+
+  // Fallback: unicast M-SEARCH directly to configured host (works across subnets)
+  if (expectedHost.length() > 0) {
+    Serial.printf("[DLNA][SSDP] Trying unicast M-SEARCH to %s:1900...\n", expectedHost.c_str());
+    if (_udp.begin(0)) {
+      IPAddress targetIP;
+      if (targetIP.fromString(expectedHost)) {
+        for (int attempt = 0; attempt < 3; attempt++) {
+          sendSearchUnicast(targetIP);
+          unsigned long uStart = millis();
+          while (millis() - uStart < 2000) {
+            String url;
+            if (receiveResponse(url)) {
+              outDescUrl = url;
+              _udp.stop();
+              Serial.printf("[DLNA][SSDP] unicast response: %s\n", url.c_str());
+              return true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+          }
+        }
+      }
+      _udp.stop();
+    }
+    Serial.println("[DLNA][SSDP] unicast fallback also failed");
+  }
+
   return false;
+}
+
+bool DlnaSSDP::sendSearchUnicast(const IPAddress& targetIP) {
+  const char* msg =
+    "M-SEARCH * HTTP/1.1\r\n"
+    "HOST: 239.255.255.250:1900\r\n"
+    "MAN: \"ssdp:discover\"\r\n"
+    "MX: 1\r\n"
+    "ST: urn:schemas-upnp-org:device:MediaServer:1\r\n"
+    "\r\n";
+
+  _udp.beginPacket(targetIP, SSDP_PORT);
+  _udp.write((const uint8_t*)msg, strlen(msg));
+  _udp.endPacket();
+  return true;
 }
 
 bool DlnaSSDP::sendSearch() {

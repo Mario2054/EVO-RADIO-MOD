@@ -874,7 +874,7 @@ void vuMeterMode5_unused() // Tryb 5: 16 słupków – dynamiczny analizator z z
   eq_analyzer_set_runtime_active(true);
   
   // Jeśli analizator jest wyłączony – pokaż prosty komunikat
-  if (!eqAnalyzerEnabled)
+  if (!eqAnalyzerEnabled || !eq_analyzer_get_enabled())
   {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
@@ -1171,7 +1171,7 @@ void vuMeterMode8() // Tryb 8: 16 słupków – dynamiczny analizator z zegarem 
   eq_analyzer_set_runtime_active(true);
   
   // Jeśli analizator jest wyłączony – pokaż prosty komunikat
-  if (!eqAnalyzerEnabled)
+  if (!eqAnalyzerEnabled || !eq_analyzer_get_enabled())
   {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
@@ -1467,7 +1467,7 @@ void vuMeterMode6() // Tryb 6: 16 słupków z cienkich „kreseczek" + peak, pe�
   // Powiedz analizatorowi, że jest aktywny
   eq_analyzer_set_runtime_active(true);
   
-  if (!eqAnalyzerEnabled)
+  if (!eqAnalyzerEnabled || !eq_analyzer_get_enabled())
   {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
@@ -1734,7 +1734,7 @@ void vuMeterMode10() // Styl 10: Floating Peaks - szczytowe ulatują w górę (b
 {
   eq_analyzer_set_runtime_active(true);
   
-  if (!eqAnalyzerEnabled) {
+  if (!eqAnalyzerEnabled || !eq_analyzer_get_enabled()) {
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
     u8g2.setCursor(10, 24);

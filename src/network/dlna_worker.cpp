@@ -131,6 +131,7 @@ static void dlna_worker_task(void* ) {
       // Position and state management handled externally
 
       g_dlnaPlaylistDirty = true;
+      bumpPlaylistVer();  // bump przy kazdym NOWYM buildzie (wczesniej tylko przy append!)
 
       dlna_status_setDone(j, true, 0, "build ok");
     }
@@ -210,7 +211,11 @@ else if (j.type == DJ_LIST) {
   dlna_status_setBusy(j, "list");
 
   if (!g_dlnaControlUrl.length()) {
+    // POPRAWKA: g_dlnaListResult pisany z Core0, czytany z async handlera (Core1)
+    // - chronimy semaforem tak samo jak SPIFFS aby uniknac korupcji Stringa
+    xSemaphoreTake(g_spiffsMux, portMAX_DELAY);
     g_dlnaListResult = "{\"ok\":false,\"err\":\"DLNA not initialized\"}";
+    xSemaphoreGive(g_spiffsMux);
     dlna_status_setDone(j, false, 503, "DLNA not initialized");
     continue;
   }
@@ -218,7 +223,11 @@ else if (j.type == DJ_LIST) {
   DlnaIndex idx;
   String outJson;
   bool okList = idx.listContainer(g_dlnaControlUrl, String(j.objectId), outJson, 0);
+
+  xSemaphoreTake(g_spiffsMux, portMAX_DELAY);
   g_dlnaListResult = okList ? outJson : "{\"ok\":false,\"err\":\"Browse failed\"}";
+  xSemaphoreGive(g_spiffsMux);
+
   dlna_status_setDone(j, okList, okList ? 0 : 500, okList ? "list ok" : "list failed");
 }
 

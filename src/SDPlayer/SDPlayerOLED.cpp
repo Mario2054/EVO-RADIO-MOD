@@ -2835,6 +2835,11 @@ bool SDPlayerOLED::checkEncoderLongPress(bool buttonState) {
         sdPlayerPlayingMusic = false;
         _encoderButtonPressed = false; // Reset flagi
         deactivate();
+        // Przywróć zapisany bank i stację radiową
+        bank_nr = sdPlayerReturnBank;
+        station_nr = sdPlayerReturnStation;
+        Serial.printf("[SDPlayer] LongPress exit: Przywrócono pozycję: Bank %d, Stacja %d\n", bank_nr, station_nr);
+        changeStation();
         displayRadio();
         return true; // Zwracamy true - długie przytrzymanie wykryte
     }

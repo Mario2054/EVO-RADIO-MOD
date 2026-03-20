@@ -8,6 +8,7 @@
 #include "dlna_worker.h"
 
 extern String dlnaHost;  // from main.cpp (changed to String for runtime config)
+extern void saveDLNAConfig();  // from main.cpp - zapisuje host do pliku na SD
 
 String g_dlnaControlUrl;
 
@@ -49,6 +50,7 @@ bool dlnaInit(const String& rootObjectId, String& err) {
         Serial.printf("[DLNA] Auto-updating dlnaHost: %s -> %s\n",
                       dlnaHost.c_str(), discoveredHost.c_str());
         dlnaHost = discoveredHost;
+        saveDLNAConfig();  // Zapisz nowy host do pliku na SD - nie zgub po restarcie
       }
     }
   }
@@ -64,8 +66,9 @@ bool dlnaInit(const String& rootObjectId, String& err) {
       cdOk = true;
       break;
     }
-
-    vTaskDelay(pdMS_TO_TICKS(500));   // ✔ delay helyett
+    // Nie powtarzaj przy bledach 4xx - sa permanentne (403=brak uprawnien, 404=zly URL)
+    if (controlUrl == "403" || controlUrl == "404") break;
+    vTaskDelay(pdMS_TO_TICKS(1000));
   }
 
   if (!cdOk || !controlUrl.length()) {

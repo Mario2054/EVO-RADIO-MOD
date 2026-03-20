@@ -66,6 +66,9 @@ if (!controlUrl.length()) {
 
     http.addHeader("Content-Type", "text/xml; charset=\"utf-8\"");
     http.addHeader("SOAPACTION", "\"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"");
+    http.addHeader("Accept-Encoding", "identity");  // nie korzystaj z gzip
+    http.addHeader("User-Agent", "UPnP/1.0 ESP32Radio/1.0");
+    http.addHeader("Connection", "close");
 
     int code = http.POST((uint8_t*)soap.c_str(), soap.length());
     if (code != HTTP_CODE_OK) {

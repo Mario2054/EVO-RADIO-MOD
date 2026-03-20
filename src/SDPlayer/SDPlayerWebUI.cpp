@@ -1,12 +1,15 @@
-#include "SDPlayerWebUI.h"
+﻿#include "SDPlayerWebUI.h"
 #include "Audio.h"
 #include "SDPlayerOLED.h"
 #include "EQ_FFTAnalyzer.h"  // Dla eq_analyzer_set_sdplayer_mode()
 
 // Extern zmienne z main.cpp
-// STORAGE to makro: #define STORAGE (*_storage)
-extern fs::FS* _storage;  // Wskaźnik do aktywnego systemu plików (SD lub LittleFS)
-#define STORAGE (*_storage)
+#ifdef AUTOSTORAGE
+  extern fs::FS* _storage;
+  #define STORAGE (*_storage)
+#else
+  #define STORAGE SD
+#endif
 
 extern bool sdPlayerScanRequested; // Flaga żądania skanowania katalogu (obsługa w loop())
 
