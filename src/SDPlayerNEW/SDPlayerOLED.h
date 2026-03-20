@@ -148,6 +148,10 @@ private:
     unsigned long _lastEncoderClickTime;
     uint8_t _encoderClickCount;
     unsigned long _encoderButtonPressStart;
+
+    // --- UTF-8 → polskie znaki dla czcionek 8-bit (rozwiązanie z SDPlayerAdvanced)
+    static void processPolishText(String& text);
+    void drawStrPL(int x, int y, const String& text);
     bool _encoderButtonPressed;
     
     // Tryb enkodera - kontrola głośności vs nawigacja po liście

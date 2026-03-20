@@ -185,7 +185,7 @@ void SDPlayerWebUI::handleRoot(AsyncWebServerRequest *request) {
         Serial.println("========================================");
     }
     
-    request->send_P(200, "text/html", SDPLAYER_HTML);
+    request->send_P(200, "text/html; charset=utf-8", SDPLAYER_HTML);
     // Serial.println("SDPlayerWebUI: HTML sent");
 }
 
@@ -328,7 +328,7 @@ void SDPlayerWebUI::handleList(AsyncWebServerRequest *request) {
     String response;
     serializeJson(doc, response);
     // Serial.println("SDPlayerWebUI: Sending JSON: " + response);
-    request->send(200, "application/json", response);
+    request->send(200, "application/json; charset=utf-8", response);
 }
 
 void SDPlayerWebUI::handlePlay(AsyncWebServerRequest *request) {
@@ -338,7 +338,7 @@ void SDPlayerWebUI::handlePlay(AsyncWebServerRequest *request) {
     
     if (now - lastPlayTime < 500) { // Minimalna przerwa 500ms między play
         Serial.println("SDPlayerWebUI: Play request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastPlayTime = now;
@@ -349,7 +349,7 @@ void SDPlayerWebUI::handlePlay(AsyncWebServerRequest *request) {
         Serial.printf("[SDPlayerWebUI] Playing index: %d from web interface\n", idx);
         playIndex(idx);
     }
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handlePlaySelected(AsyncWebServerRequest *request) {
@@ -359,7 +359,7 @@ void SDPlayerWebUI::handlePlaySelected(AsyncWebServerRequest *request) {
     
     if (now - lastPlaySelectedTime < 500) { // Minimalna przerwa 500ms
         Serial.println("SDPlayerWebUI: PlaySelected request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastPlaySelectedTime = now;
@@ -370,7 +370,7 @@ void SDPlayerWebUI::handlePlaySelected(AsyncWebServerRequest *request) {
     } else {
         // Serial.println("SDPlayerWebUI: No file selected or invalid index");
     }
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handlePause(AsyncWebServerRequest *request) {
@@ -380,14 +380,14 @@ void SDPlayerWebUI::handlePause(AsyncWebServerRequest *request) {
     
     if (now - lastPauseTime < 200) { // Minimalna przerwa 200ms między pause/resume
         Serial.println("SDPlayerWebUI: Pause request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastPauseTime = now;
     
     // Serial.println("SDPlayerWebUI: handlePause called");
     pause();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleStop(AsyncWebServerRequest *request) {
@@ -397,14 +397,14 @@ void SDPlayerWebUI::handleStop(AsyncWebServerRequest *request) {
     
     if (now - lastStopTime < 200) { // Minimalna przerwa 200ms
         Serial.println("SDPlayerWebUI: Stop request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastStopTime = now;
     
     // Serial.println("SDPlayerWebUI: handleStop called");
     stop();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleNext(AsyncWebServerRequest *request) {
@@ -414,14 +414,14 @@ void SDPlayerWebUI::handleNext(AsyncWebServerRequest *request) {
     
     if (now - lastNextTime < 200) { // Minimalna przerwa 200ms
         Serial.println("SDPlayerWebUI: Next request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastNextTime = now;
     
     // Serial.println("SDPlayerWebUI: handleNext called");
     next();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handlePrev(AsyncWebServerRequest *request) {
@@ -431,14 +431,14 @@ void SDPlayerWebUI::handlePrev(AsyncWebServerRequest *request) {
     
     if (now - lastPrevTime < 200) { // Minimalna przerwa 200ms
         Serial.println("SDPlayerWebUI: Prev request IGNORED (debouncing)");
-        request->send(200, "text/plain", "OK");
+        request->send(200, "text/plain; charset=utf-8", "OK");
         return;
     }
     lastPrevTime = now;
     
     // Serial.println("SDPlayerWebUI: handlePrev called");
     prev();
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleVol(AsyncWebServerRequest *request) {
@@ -446,7 +446,7 @@ void SDPlayerWebUI::handleVol(AsyncWebServerRequest *request) {
         int vol = request->getParam("v")->value().toInt();
         setVolume(vol);
     }
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleSeek(AsyncWebServerRequest *request) {
@@ -459,7 +459,7 @@ void SDPlayerWebUI::handleSeek(AsyncWebServerRequest *request) {
         int targetSeconds = request->getParam("pos")->value().toInt();
         seekAbsolute(targetSeconds);
     }
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleCd(AsyncWebServerRequest *request) {
@@ -469,7 +469,7 @@ void SDPlayerWebUI::handleCd(AsyncWebServerRequest *request) {
         // Serial.println("Changing directory to: " + path);
         changeDirectory(path);
     }
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleUp(AsyncWebServerRequest *request) {
@@ -477,7 +477,7 @@ void SDPlayerWebUI::handleUp(AsyncWebServerRequest *request) {
     
     // BEZPIECZNE: Tylko zmień ścieżkę, nie skanuj od razu
     if (_currentDir == "/") {
-        request->send(200, "text/plain", "Already at root");
+        request->send(200, "text/plain; charset=utf-8", "Already at root");
         return;
     }
     
@@ -494,7 +494,7 @@ void SDPlayerWebUI::handleUp(AsyncWebServerRequest *request) {
     sdPlayerScanRequested = true;  // Skanowanie w loop() aby uniknąć timeout
     
     Serial.println("SDPlayerWebUI: Up to directory: " + _currentDir);
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::handleBack(AsyncWebServerRequest *request) {
@@ -528,7 +528,7 @@ void SDPlayerWebUI::handleBack(AsyncWebServerRequest *request) {
     
     Serial.println("SDPlayerWebUI: Back to radio completed successfully");
     Serial.println("========================================");
-    request->send(200, "text/plain", "OK");
+    request->send(200, "text/plain; charset=utf-8", "OK");
 }
 
 void SDPlayerWebUI::playFile(const String& path) {
@@ -1197,9 +1197,9 @@ void SDPlayerWebUI::handleNextStyle(AsyncWebServerRequest *request) {
     if (_oled) {
         _oled->nextStyle();
         Serial.printf("SDPlayerWebUI: Switched to next style: %d\\n", _oled->getStyle());
-        request->send(200, "application/json", "{\"style\":" + String(_oled->getStyle()) + "}");
+        request->send(200, "application/json; charset=utf-8", "{\"style\":" + String(_oled->getStyle()) + "}");
     } else {
-        request->send(500, "text/plain", "OLED not available");
+        request->send(500, "text/plain; charset=utf-8", "OLED not available");
     }
 }
 
@@ -1210,7 +1210,7 @@ void SDPlayerWebUI::handleSetStyle(AsyncWebServerRequest *request) {
     
     if (!request->hasParam("style")) {
         Serial.println("ERROR: Missing 'style' parameter");
-        request->send(400, "text/plain", "Missing style parameter");
+        request->send(400, "text/plain; charset=utf-8", "Missing style parameter");
         return;
     }
     
@@ -1220,7 +1220,7 @@ void SDPlayerWebUI::handleSetStyle(AsyncWebServerRequest *request) {
     
     if (!_oled) {
         Serial.println("ERROR: _oled is NULL!");
-        request->send(500, "text/plain", "OLED not available - WebUI not linked");
+        request->send(500, "text/plain; charset=utf-8", "OLED not available - WebUI not linked");
         return;
     }
     
@@ -1228,10 +1228,10 @@ void SDPlayerWebUI::handleSetStyle(AsyncWebServerRequest *request) {
         Serial.printf("SDPlayerWebUI: Setting OLED style to %d\n", style);
         _oled->setStyle((SDPlayerOLED::DisplayStyle)style);
         Serial.printf("SDPlayerWebUI: Style set successfully to %d\n", style);
-        request->send(200, "application/json", "{\"style\":" + String(style) + "}");
+        request->send(200, "application/json; charset=utf-8", "{\"style\":" + String(style) + "}");
     } else {
         Serial.printf("ERROR: Invalid style number: %d (must be 1-14)\n", style);
-        request->send(400, "text/plain", "Invalid style number (1-14)");
+        request->send(400, "text/plain; charset=utf-8", "Invalid style number (1-14)");
     }
     Serial.println("========================================");
 }
@@ -1240,16 +1240,16 @@ void SDPlayerWebUI::handleGetStyle(AsyncWebServerRequest *request) {
     if (_oled) {
         int currentStyle = _oled->getStyle();
         Serial.printf("SDPlayerWebUI: Current style is %d\n", currentStyle);
-        request->send(200, "application/json", "{\"style\":" + String(currentStyle) + "}");
+        request->send(200, "application/json; charset=utf-8", "{\"style\":" + String(currentStyle) + "}");
     } else {
-        request->send(500, "text/plain", "OLED not available");
+        request->send(500, "text/plain; charset=utf-8", "OLED not available");
     }
 }
 
 // ===== USUWANIE PLIKÓW (TYLKO RECORDINGS) =====
 void SDPlayerWebUI::handleDelete(AsyncWebServerRequest *request) {
     if (!request->hasParam("f")) {
-        request->send(400, "application/json", "{\"success\":false,\"error\":\"Missing filename\"}");
+        request->send(400, "application/json; charset=utf-8", "{\"success\":false,\"error\":\"Missing filename\"}");
         return;
     }
     
@@ -1258,7 +1258,7 @@ void SDPlayerWebUI::handleDelete(AsyncWebServerRequest *request) {
     // Zabezpieczenie: Usuwanie tylko w folderze RECORDINGS
     if (!_currentDir.startsWith("/RECORDINGS")) {
         Serial.printf("[SDPlayer DELETE] Zabronione usuwanie poza /RECORDINGS: %s\n", _currentDir.c_str());
-        request->send(403, "application/json", "{\"success\":false,\"error\":\"Deleting allowed only in RECORDINGS folder\"}");
+        request->send(403, "application/json; charset=utf-8", "{\"success\":false,\"error\":\"Deleting allowed only in RECORDINGS folder\"}");
         return;
     }
     
@@ -1274,7 +1274,7 @@ void SDPlayerWebUI::handleDelete(AsyncWebServerRequest *request) {
     // Sprawdź czy plik istnieje
     if (!STORAGE.exists(fullPath)) {
         Serial.printf("[SDPlayer DELETE] Plik nie istnieje: %s\n", fullPath.c_str());
-        request->send(404, "application/json", "{\"success\":false,\"error\":\"File not found\"}");
+        request->send(404, "application/json; charset=utf-8", "{\"success\":false,\"error\":\"File not found\"}");
         return;
     }
     
@@ -1291,10 +1291,10 @@ void SDPlayerWebUI::handleDelete(AsyncWebServerRequest *request) {
         // Odśwież listę plików
         scanCurrentDirectory();
         
-        request->send(200, "application/json", "{\"success\":true}");
+        request->send(200, "application/json; charset=utf-8", "{\"success\":true}");
     } else {
         Serial.printf("[SDPlayer DELETE] ERROR: Nie udało się usunąć %s\n", fullPath.c_str());
-        request->send(500, "application/json", "{\"success\":false,\"error\":\"Failed to delete file\"}");
+        request->send(500, "application/json; charset=utf-8", "{\"success\":false,\"error\":\"Failed to delete file\"}");
     }
 }
 

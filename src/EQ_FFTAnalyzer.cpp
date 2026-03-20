@@ -296,8 +296,6 @@ void eq_analyzer_set_enabled(bool en){
   }
 }
 bool eq_analyzer_get_enabled(void){ return g_enabled; }
-bool eq_analyzer_get_runtime_active(void){ return g_runtimeActive; }
-QueueHandle_t eq_analyzer_get_queue(void){ return g_q; }
 
 void eq_analyzer_set_runtime_active(bool active){
   g_runtimeActive = active;
@@ -326,8 +324,11 @@ void eq_analyzer_set_sample_rate(uint32_t sample_rate_hz){
 
 void eq_analyzer_push_samples_i16(const int16_t* interleavedLR, uint32_t frames){
   // UWAGA: ta funkcja leci z audio path – zero printów, zero malloc, zero heavy math.
-  if(!g_enabled) { return; }
-  if(!g_q) { return; }
+  if(!g_enabled) return;
+  if(!g_q) return;
+
+  // jeśli nieaktywny runtime – też nie zbieramy (oszczędzamy RAM/CPU)
+  if(!g_runtimeActive && !g_testGen) return;
 
   // mono = (L+R)/2, downsample
   for(uint32_t i=0;i<frames;i++){
@@ -335,14 +336,6 @@ void eq_analyzer_push_samples_i16(const int16_t* interleavedLR, uint32_t frames)
       if(g_ds_phase++ < (g_downsample-1)) continue;
       g_ds_phase = 0;
     }
-
-    // ZAWSZE inkrementuj licznik – is_receiving_samples() musi działać
-    // nawet zanim display aktywuje runtime (jak w starej bibliotece)
-    uint32_t temp = g_samplesPushed;
-    g_samplesPushed = temp + 1;
-
-    // Przetwarzaj FFT tylko gdy runtime aktywny (oszczędność CPU)
-    if(!g_runtimeActive && !g_testGen) continue;
 
     int32_t L = interleavedLR[i*2 + 0];
     int32_t R = interleavedLR[i*2 + 1];
@@ -357,6 +350,9 @@ void eq_analyzer_push_samples_i16(const int16_t* interleavedLR, uint32_t frames)
     int16_t m = (int16_t)mono32;
 
     g_acc[g_acc_n++] = m;
+    // Fix deprecated volatile increment
+    uint32_t temp = g_samplesPushed;
+    g_samplesPushed = temp + 1; // liczymy realnie próbki mono po downsample
 
     if(g_acc_n >= FRAME_N){
       frame_t fr;

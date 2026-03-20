@@ -2,128 +2,103 @@
 #include <Arduino.h>
 #include <SD.h>
 #include <FS.h>
-#include <WiFiClient.h>
-#include <WiFiClientSecure.h>
-#include <freertos/stream_buffer.h>
 
 /**
- * SDRecorder v2 - Nagrywanie strumienia radiowego bezposrednio jako MP3
- *
- * Nowe podejscie (przepisane na wzor ESP32_internet_radio_v3):
- * Nagrywanie strumienia audio w formacie MP3 (bezstratna kopia strumienia z serwera)
- * Male pliki: 128 kbps ~ 1 MB/min (vs ~10 MB/min dla WAV w starej wersji)
- * Obsluga HTTP i HTTPS (z samopodpisanymi certyfikatami - setInsecure)
- * Obsluga Transfer-Encoding: chunked (automatyczne wykrywanie i parsowanie)
- * Obsluga redirectow HTTP (rekurencyjnie, max 5 poziomow)
- * Automatyczna nazwa pliku: REC_YYYYMMDD_HHMMSS_StationName.mp3
- * Prosty model: loop() odczytuje TCP -> SD, brak FreeRTOS task, brak ring buffer
- * Timeout 20s - automatyczne zatrzymanie przy braku danych
- * Zgodny interfejs z poprzednia wersja (te same public metody)
+ * SDRecorder - Nagrywanie strumienia radiowego do pliku na SD
+ * 
+ * Funkcje:
+ * ✅ Nagrywanie strumienia audio w formacie surowym (RAW PCM)
+ * ✅ Automatyczna nazwa pliku: REC_YYYYMMDD_HHMMSS_StationName.raw
+ * ✅ Wyświetlanie statusu nagrywania na OLED
+ * ✅ Obsługa przez pilot IR (START/STOP/PAUSE)
+ * ✅ Licznik czasu nagrywania
+ * ✅ Buforowanie danych przed zapisem (minimalizacja zapisów)
+ * ✅ Wsparcie dla różnych formatów (MP3 stream passthrough - przyszłość)
  */
 
 class SDRecorder {
 public:
-    // Stan nagrywania (zgodny wstecz z poprzednia wersja)
+    // Status nagrywania
     enum RecordState {
-        IDLE      = 0,
-        RECORDING = 1,
-        PAUSED    = 2   // nieuzywany w v2, zachowany dla zgodnosci
+        IDLE = 0,           // Nie nagrywa
+        RECORDING = 1,      // Aktywnie nagrywa
+        PAUSED = 2          // Pauza
     };
 
     SDRecorder();
     ~SDRecorder();
-
-    // Inicjalizacja - wywolaj raz w setup()
+    
+    // Inicjalizacja
     void begin();
-
-    // Glowna petla - wywoluj w loop() przez SDRecorder_loop()
-    // Odczytuje dane z TCP i zapisuje na SD
+    
+    // Główna pętla - wywołuj w loop()
     void loop();
-
+    
     // Kontrola nagrywania
-    // stationUrl jest wymagany - to adres strumienia (np. "http://stream.example.com/live")
-    bool startRecording(const String& stationName = "", const String& stationUrl = "");
-    void stopRecording();
-    void toggleRecording(const String& stationName = "", const String& stationUrl = "");
-
+    bool startRecording(const String& stationName = "");  // Rozpocznij nagrywanie
+    void stopRecording();                                  // Zatrzymaj i zapisz
+    void pauseRecording();                                 // Wstrzymaj (bez zamykania pliku)
+    void resumeRecording();                                // Wznów nagrywanie
+    void toggleRecording(const String& stationName = ""); // Toggle START/STOP
+    
+    // Push audio data (wywołaj z audio_process_i2s)
+    void pushAudioData(const int16_t* buffer, int32_t frames);
+    
+    // Ustawienie wzmocnienia (gain) - domyślnie 4.0 (4x głośniej)
+    void setGain(float gain) { _gain = gain; }
+    float getGain() const { return _gain; }
+    
     // Gettery statusu
-    RecordState   getState()            const { return _state; }
-    bool          isRecording()         const { return _state == RECORDING; }
-    bool          isPaused()            const { return _state == PAUSED; }
-    unsigned long getRecordTime()       const;
-    String        getRecordTimeString() const;
-    String        getCurrentFileName()  const { return _currentFileName; }
-    size_t        getFileSize()         const { return _fileSize; }
-    String        getFileSizeString()   const;
-
-    // Callback statusu na OLED (taki sam interfejs jak v1)
+    RecordState getState() const { return _state; }
+    bool isRecording() const { return _state == RECORDING; }
+    bool isPaused() const { return _state == PAUSED; }
+    unsigned long getRecordTime() const;      // Czas nagrywania w sekundach
+    String getRecordTimeString() const;       // Format: "HH:MM:SS"
+    String getCurrentFileName() const { return _currentFileName; }
+    size_t getFileSize() const { return _fileSize; }
+    String getFileSizeString() const;         // Format: "12.5 MB"
+    
+    // Wyświetlanie na OLED (callback - ustaw z main.cpp)
     typedef void (*DisplayCallback)(const String& status, const String& time, const String& size);
     void setDisplayCallback(DisplayCallback callback) { _displayCallback = callback; }
-
-    // Reset timeoutu — wywolaj przed dluga operacja (np. TTS), zeby recTask nie przerwał nagrywania
-    void resetTimeout() { _lastRecordRead = millis(); }
-
+    
     // Konfiguracja
-    void setMaxFileSize(size_t maxMB);       // 0 = unlimited
-    void setRecordPath(const String& path);  // domyslnie "/RECORDINGS"
-
+    void setBufferSize(size_t size);          // Rozmiar bufora zapisu (domyślnie 32KB)
+    void setMaxFileSize(size_t maxMB);        // Max rozmiar pliku w MB (0 = unlimited)
+    void setRecordPath(const String& path);   // Katalog zapisu (domyślnie "/RECORDINGS")
+    
 private:
     // Stan
-    RecordState   _state;
-    File          _recordFile;
-    String        _currentFileName;
-    String        _recordPath;
-    String        _stationUrl;
-
+    RecordState _state;
+    File _recordFile;
+    String _currentFileName;
+    String _recordPath;
+    
     // Statystyki
     unsigned long _recordStartTime;
-    size_t        _fileSize;
-    size_t        _maxFileSize;
-
-    // Polaczenie TCP (HTTP / HTTPS)
-    WiFiClient       _recClient;
-    WiFiClientSecure _recSecure;
-    bool             _useSSL;
-
-    // Parsowanie HTTP
-    bool          _headersRead;    // czy naglowki juz przeczytane w tej sesji
-    bool          _isChunked;      // Transfer-Encoding: chunked
-    String        _fileExt;        // rozszerzenie pliku wykryte z Content-Type (.mp3/.flac/.aac/.ogg)
-    unsigned long _lastRecordRead; // timestamp ostatniego bajtu - do timeoutu
-
-    // Bufor zapisu SD (loop() / stopRecording() — Core 1)
-    // ODDZIELNY od bufora TCP w recTask (Core 0) — eliminuje race condition!
-    // 512 = rozmiar 1 sektora SD = 1 deskryptor DMA (12 bajtow)
-    // 4096 wymaga 8 deskryptorow DMA — przy sfragmentowanym heap alokacja nie wychodzi
-    static const size_t BUFFER_SIZE = 512;
-    uint8_t*      _buffer;
-    size_t        _lastFlush;   // zamiennik static lastFlush z loop()
-
-    // FreeRTOS task (Core 0) — czyta TCP i wrzuca do _streamBuf
-    // loop() (Core 1) drainuje _streamBuf i zapisuje na SD
-    // Dzieki temu wszystkie operacje SD sa z jednego kontekstu — brak konfliktow SPI
-    volatile bool        _stopRequested;
-    TaskHandle_t         _recTaskHandle;
-    StreamBufferHandle_t _streamBuf;   // thread-safe SPSC, 128 KB
-    static void          recTask(void* param);
-
+    unsigned long _recordPauseTime;
+    unsigned long _totalPauseTime;
+    size_t _fileSize;
+    size_t _maxFileSize;
+    
+    // Bufor
+    uint8_t* _writeBuffer;
+    size_t _bufferSize;
+    size_t _bufferPos;
+    float _gain;                  // Wzmocnienie sygnału (1.0 = bez zmian, 4.0 = 4x głośniej)
+    
     // Callback
     DisplayCallback _displayCallback;
-
-    // Polaczenie ze stacja (z obsluga redirectow)
-    bool connectStream(const String& url, int depth = 0);
-
-    // Pomocnicze parsowanie HTTP
-    String readHttpLine(WiFiClient& c);
-    int    readChunkSize(WiFiClient& c);
-    int    readHttpHeaders(WiFiClient& c, String& redirectUrl);
-
-    // Generowanie nazwy pliku i folderu
+    
+    // Metody prywatne
     String generateFileName(const String& stationName);
-    void   ensureRecordDirectory();
-
-    // Formatowanie rozmiaru pliku
+    bool openRecordFile(const String& filename);
+    void closeRecordFile();
+    void flushBuffer();
+    void ensureRecordDirectory();
     String formatFileSize(size_t bytes) const;
+    void writeWavHeader(uint32_t sampleRate, uint16_t numChannels, uint16_t bitsPerSample, uint32_t dataSize);
+    void updateWavHeader();
 };
 
 // Globalna instancja (deklaracja - definicja w .cpp)
